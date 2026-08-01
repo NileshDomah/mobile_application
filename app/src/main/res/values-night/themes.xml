@@ -1,0 +1,17 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Base application theme. -->
+    <style name="Theme.Mob_app_assignment" parent="Theme.MaterialComponents.DayNight.DarkActionBar">
+        <!-- Primary brand color: lighter civic blue tint for dark backgrounds. -->
+        <item name="colorPrimary">@color/civic_blue_light</item>
+        <item name="colorPrimaryVariant">@color/civic_blue_dark</item>
+        <item name="colorOnPrimary">@color/black</item>
+        <!-- Secondary brand color: amber accent for urgent report actions. -->
+        <item name="colorSecondary">@color/civic_amber</item>
+        <item name="colorSecondaryVariant">@color/civic_amber_dark</item>
+        <item name="colorOnSecondary">@color/black</item>
+        <!-- Status bar / window background color, matching the dark civic surface
+             so there is no flash-of-wrong-color before Compose's AppTheme takes over. -->
+        <item name="android:statusBarColor">#1A1C1E</item>
+        <item name="android:windowBackground">#1A1C1E</item>
+    </style>
+</resources>
