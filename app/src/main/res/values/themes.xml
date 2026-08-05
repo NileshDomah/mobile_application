@@ -14,4 +14,14 @@
         <item name="android:statusBarColor">@color/civic_blue_dark</item>
         <item name="android:windowBackground">@color/civic_blue_dark</item>
     </style>
+
+    <!-- Android 12+ SplashScreen API theme: static branded splash shown while the app cold-starts,
+         before MainActivity/AppTheme (Compose) take over. Applied only during the brief window
+         SplashScreen.installSplashScreen() controls; MainActivity's own theme takes over after. -->
+    <style name="Theme.Mob_app_assignment.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/civic_blue_dark</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_app_logo</item>
+        <item name="windowSplashScreenIconBackgroundColor">@color/civic_blue_dark</item>
+        <item name="postSplashScreenTheme">@style/Theme.Mob_app_assignment</item>
+    </style>
 </resources>

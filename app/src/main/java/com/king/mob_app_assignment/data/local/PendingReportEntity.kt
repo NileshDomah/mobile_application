@@ -8,6 +8,7 @@ data class PendingReportEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val userId: String,
     val category: String,
+    val customLabel: String = "",
     val localPhotoPath: String,
     val latitude: Double,
     val longitude: Double,

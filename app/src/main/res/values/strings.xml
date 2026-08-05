@@ -1,3 +1,64 @@
 <resources>
     <string name="app_name">mob_app_assignment</string>
+
+    <!-- Bottom navigation -->
+    <string name="nav_home">Home</string>
+    <string name="nav_reports">Reports</string>
+    <string name="nav_my_reports">My Reports</string>
+    <string name="nav_profile">Profile</string>
+    <string name="nav_admin">Admin</string>
+
+    <!-- Auth: shared brand header -->
+    <string name="auth_app_title">Shake to Report</string>
+    <string name="auth_logo_content_description">Shake to Report logo</string>
+
+    <!-- Auth: Login screen -->
+    <string name="login_welcome_back">Welcome back</string>
+    <string name="login_subtitle">Log in to continue reporting civic issues</string>
+    <string name="login_email_label">Email</string>
+    <string name="login_password_label">Password</string>
+    <string name="login_remember_me">Remember me</string>
+    <string name="login_button">Log In</string>
+    <string name="login_register_prompt">Don\'t have an account? Register</string>
+
+    <!-- Auth: Register screen -->
+    <string name="register_create_account">Create account</string>
+    <string name="register_subtitle">Join your community in reporting civic issues</string>
+    <string name="register_display_name_label">Display name</string>
+    <string name="register_email_label">Email</string>
+    <string name="register_password_label">Password</string>
+    <string name="register_confirm_password_label">Confirm password</string>
+    <string name="register_button">Register</string>
+    <string name="register_login_prompt">Already have an account? Log in</string>
+
+    <!-- Home screen -->
+    <string name="home_top_bar_title">Shake to Report</string>
+    <string name="home_report_issue_button">Report an Issue</string>
+    <string name="home_shake_tip">Tip: shake your phone to report instantly, wherever you are.</string>
+    <string name="home_recent_activity">Recent activity</string>
+    <string name="home_no_reports_title">No reports yet</string>
+    <string name="home_no_reports_message">You haven\'t filed any reports yet.</string>
+
+    <!-- Settings screen -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_shake_sensitivity_title">Shake sensitivity</string>
+    <string name="settings_shake_sensitivity_description">Lower = more sensitive (easier to trigger a shake report). Higher = requires a harder shake.</string>
+    <string name="settings_current_threshold">Current threshold: %1$d</string>
+    <string name="settings_permission_dashboard">Permission Dashboard</string>
+    <string name="settings_language_title">Language</string>
+    <string name="settings_language_description">Choose the app\'s display language.</string>
+    <string name="settings_language_english">English</string>
+    <string name="settings_language_spanish">Español</string>
+    <string name="settings_language_french">Français</string>
+
+    <!-- Onboarding walkthrough -->
+    <string name="onboarding_skip">Skip</string>
+    <string name="onboarding_next">Next</string>
+    <string name="onboarding_get_started">Get Started</string>
+    <string name="onboarding_page1_title">Report civic issues in seconds</string>
+    <string name="onboarding_page1_body">Spot a pothole, broken light, or overflowing bin? Capture it and send it to the right people right away.</string>
+    <string name="onboarding_page2_title">Just shake your phone</string>
+    <string name="onboarding_page2_body">Wherever you are, a quick shake opens the report camera instantly - no need to hunt for the app.</string>
+    <string name="onboarding_page3_title">Track every report</string>
+    <string name="onboarding_page3_body">Follow status updates from submission to resolution in My Reports, so you always know what happened.</string>
 </resources>

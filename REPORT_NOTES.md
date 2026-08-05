@@ -18,6 +18,61 @@ Organized to map directly onto the required report sections (5.1-5.7).
 
 ---
 
+## 2026-08-04 — Admin Workflow, Phase 1: Data Model for Triage & Citizen Feedback Loop
+
+**Why**: The original build let admins flip a status dropdown (SUBMITTED -> IN_REVIEW ->
+RESOLVED) with no real triage information and no explanation sent back to the citizen who filed
+the report. This phase lays the data-model groundwork for a genuine admin workflow: routing a
+report to a department, prioritising it, and recording what was actually found/done when it's
+resolved, plus a community-signal feature (upvoting) so citizens can indicate an existing report
+also affects them, rather than filing a duplicate.
+
+**Functionality (30%)**:
+- `Report` gained `department: Department?`, `priority: ReportPriority` (default `NORMAL`),
+  `resolutionNote: String` (admin's explanation of what was found/done), `resolutionPhotoPath:
+  String?` (local-only "after" photo, mirroring the existing `localPhotoPath` no-Storage pattern
+  used for the citizen's original photo), `upvoteCount: Int`, and `upvotedByUids: List<String>`
+  (so the UI can show "you already upvoted this" and the backend can prevent double-upvoting).
+- New `domain/model/Department.kt` enum (ROADS/SANITATION/ELECTRICAL/WATER/OTHER) with a
+  `displayLabel()` extension, and `domain/model/ReportPriority.kt` enum (LOW/NORMAL/HIGH/URGENT)
+  with a `fromFirestoreValue` companion — both follow the exact enum pattern already established
+  by `ReportStatus`/`ReportCategory`, rather than introducing raw strings, so triage data stays as
+  consistent and type-safe as the rest of the domain model. `Department.fromFirestoreValue`
+  returns `null` (not a fallback enum value) since "no department assigned yet" is a legitimate,
+  distinct pre-triage state, unlike category/status which always have a sensible default.
+- `FirestoreSchema.kt`'s `ReportFields` gained matching constants (`DEPARTMENT`, `PRIORITY`,
+  `RESOLUTION_NOTE`, `RESOLUTION_PHOTO_PATH`, `UPVOTE_COUNT`, `UPVOTED_BY_UIDS`) and
+  `ReportRepositoryImpl`'s `toReportOrNull()`/`toFirestoreMap()` were extended to round-trip all
+  six new fields, following the same null-safe `getString`/`getLong`/enum-via-`fromFirestoreValue`
+  pattern already used for every other field. No repository methods were added yet — that's next
+  phase (Admin Workflow UI); this phase is data model + mapping only, so existing screens/
+  ViewModels are unaffected and the app continues to compile and run exactly as before.
+
+**Security (20%)**:
+- `firestore.rules`: the existing `isAdmin()` branch of the reports `update` rule is already
+  unrestricted (full field access), so it already legitimately covers admins writing
+  department/priority/resolutionNote/resolutionPhotoPath — verified by reading the rule rather
+  than assuming, no change needed there.
+- Added a new, narrowly-scoped `update` branch so *any* signed-in user (not just the report's
+  owner or an admin) can toggle an upvote on someone else's report, since upvoting is inherently
+  a cross-user write that the existing owner-or-admin rule never covered. The branch is
+  constrained via `diff(...).affectedKeys().hasOnly(['upvoteCount', 'upvotedByUids'])`, so an
+  upvote-toggle request cannot smuggle in changes to any other field (status, category, photo,
+  etc.) — it is impossible to use this new access path to tamper with a report's substance.
+  **Simplification taken**: the rule does not mathematically verify that `upvoteCount` changed by
+  exactly ±1 in lockstep with `request.auth.uid` being added to/removed from `upvotedByUids` —
+  expressing "the new array length equals old count ± 1 and the delta element is exactly
+  request.auth.uid" robustly in Firestore rules syntax was judged not worth the added rule
+  complexity for a coursework project's threat model (a malicious client could at most inflate
+  its own upvote bookkeeping on one report, not touch other users' reports or any other report
+  field). Real double-upvote/count-integrity enforcement would belong in a Cloud Function
+  transaction in a production system. Logged in `PLACEHOLDERS_TODO.csv`.
+- No existing rule was weakened: the owner-only category/note/AI-review-fields update path and
+  the owner-only delete-while-SUBMITTED path are untouched, still exactly as strict as before.
+
+**UI/UX (30%)**: No UI built in this phase by design (data model only) — deferred to the next two
+phases (Admin Workflow screens, then citizen-facing resolution/upvote UI).
+
 ## 5.2 System Design
 
 - **Architecture**: MVVM + Repository pattern, Jetpack Compose UI, Hilt for dependency injection.
@@ -1011,4 +1066,866 @@ existing composable parameter names (`onReportClick`, `title`, `scope`, `current
   UX + privacy improvement worth mentioning in Section 5.4 (Security Implementation) — the user now
   has explicit, visible control over whether their email is retained on-device, rather than it being
   an invisible default.
+- Verified with `compileDebugKotlin` (BUILD SUCCESSFUL).
+
+---
+
+## 2026-08-01 — Added visible back buttons to sub-screens
+
+- **Bug found by the user testing navigation**: `AppTopBar` (built in the redesign) already
+  supported an `onBackClick` parameter that shows a back arrow, but no screen actually passed it —
+  every pushed sub-screen (Settings, Permission Dashboard, Report Detail, Capture) rendered
+  `AppTopBar(title = "...")` with no navigation icon at all, leaving users to rely on the invisible
+  system back gesture/button, which reads as "the app isn't interactive."
+- **Fix**: added `onBackClick` parameters to `SettingsScreen`, `PermissionDashboardScreen`, and
+  `ReportDetailScreen`, and wired each call site in `MainActivity`'s nav graph to
+  `{ navController.popBackStack() }`. `CaptureScreen` already had an `onDismiss` callback that pops
+  the back stack — reused that directly for its back arrow instead of adding a redundant parameter.
+  Bottom-nav tab screens (Home, Reports, My Reports, Profile, Admin) intentionally still have no
+  back button, since back-navigating from a tab root has no meaningful target — this matches
+  standard Android bottom-nav UX (e.g. Gmail, Play Store), not an oversight.
+- Verified with `compileDebugKotlin` (BUILD SUCCESSFUL). Good example for report Section 5.6
+  (Testing) / Section 3.4 (UI/UX consistent navigation flow requirement) — a real usability gap
+  caught by hands-on navigation testing, not something a compile check alone would surface.
+
+---
+
+## 2026-08-01 — Added a real vision LLM (Gemma) as the primary category classifier
+
+- **Motivation**: the user has a local Gemma 4 E4B model (vision-capable, GGUF/Q4_K_M, served via
+  LM Studio's OpenAI-compatible API on their PC) and wants the app's AI category classification to
+  actually use a real LLM rather than only ML Kit's generic pretrained image labels, while the
+  submitted app still needs to work as a standalone product without depending on a PC being on.
+- **Architecture decision**: rather than replacing ML Kit, added a new `ai` package that composes
+  with it:
+  - `VisionAiConfig`: single object holding `BASE_URL`, `MODEL_ID`, `API_KEY` — the one place to
+    change when swapping from the local dev server to a real hosted API later. Currently
+    `http://172.16.60.31:1234` (the developer's PC LAN IP, LM Studio's default port) and model id
+    `google/gemma-4-e4b`.
+  - `VisionClassifierService`: downsizes the captured photo (max 768px, JPEG q80 — keeps upload
+    size reasonable over Wi-Fi), base64-encodes it, and calls LM Studio's `/v1/chat/completions`
+    endpoint using the **standard OpenAI-compatible chat-completions request shape** (a text part
+    asking for one of our `ReportCategory` names + an `image_url` part with a `data:` URI). This
+    request format is deliberately not LM-Studio-specific — most hosted vision APIs (OpenAI,
+    OpenRouter, and others) accept the same shape, so migrating to a real API later should mean
+    changing `VisionAiConfig` only, not rewriting the request logic.
+  - `CategoryClassifier`: tries `VisionClassifierService` first; on any failure (timeout, PC
+    off, different Wi-Fi, non-2xx response) it silently falls back to the existing
+    `MlKitCategoryClassifier`. `CaptureViewModel` now depends on `CategoryClassifier` instead of
+    `MlKitCategoryClassifier` directly — this was a one-line dependency swap since both expose the
+    same `classify(uri): CategorySuggestion` shape.
+  - Added `com.squareup.okhttp3:okhttp` as a new dependency (not previously in the project — the
+    Firebase SDKs use gRPC internally, not a general-purpose HTTP client, so a plain REST call
+    needed its own client).
+- **Networking/security**: Android blocks cleartext (plain HTTP) traffic by default on API 28+, and
+  LM Studio serves HTTP, not HTTPS. Rather than a blanket `usesCleartextTraffic="true"` (which would
+  weaken the whole app's network security posture), added a scoped
+  `res/xml/network_security_config.xml` that permits cleartext **only** to the exact LAN IP of the
+  dev PC, with `cleartextTrafficPermitted="false"` as the base/default for every other domain. This
+  is the kind of least-privilege detail worth calling out in Section 5.4 (Security Implementation)
+  — a real, deliberate trade-off (dev convenience vs. security), scoped as narrowly as possible
+  rather than disabled globally.
+- **This is explicitly a development/testing setup, not the final submission state** — logged as a
+  Blocker-priority row in `PLACEHOLDERS_TODO.csv`: before final submission (especially the demo
+  video/grading, where the developer's PC won't be present), `VisionAiConfig` needs to point at a
+  real hosted HTTPS vision API with a real key. Until then, the ML Kit fallback means the app is
+  still fully functional and demoable even without the LAN server reachable.
+- Verified with `compileDebugKotlin` (BUILD SUCCESSFUL).
+
+---
+
+## 2026-08-03 — Impact Stats (Home + Profile)
+
+- **What was built**: A lightweight "impact stats" feature giving each citizen a quick sense of
+  their own contribution: total reports they've filed, and how many of those have reached
+  `RESOLVED` status. Shown as a compact two-tile stat row (icon + big number + label) on both the
+  Home screen (below the "Report an Issue" button/tip, above Recent Activity) and the Profile
+  screen (below the profile header card, above the navigation list).
+- **Why**: Civic-engagement apps benefit from visible positive reinforcement — showing a user
+  "you've filed 12 reports, 5 resolved" makes the reporting habit feel worthwhile and closes the
+  feedback loop between filing a report and something actually happening. This is a UI/UX-facing
+  feature (contributes to the 30% UI/UX criterion) built on top of existing functionality rather
+  than new backend surface (keeps Functionality-criterion risk low, since it reuses the existing
+  `getReportsForUser` Flow with zero new repository/Firestore surface area).
+- **Implementation**:
+  - Added `domain/model/ImpactStats.kt`: a plain `data class ImpactStats(totalReports, resolvedReports)`
+    plus a pure extension function `List<Report>.toImpactStats()` that derives both counts from an
+    already-fetched report list (`size` and `count { it.status == ReportStatus.RESOLVED }`). This is
+    the single source of truth for the counting logic — both ViewModels call the same function so
+    the numbers can never drift apart or need separate bug fixes.
+  - No new `ReportRepository` method was added — `getReportsForUser(uid): Flow<List<Report>>`
+    already emits everything needed; deriving stats client-side via `.map { it.toImpactStats() }`
+    was straightforward, so per the phase instructions no new repository method was introduced.
+  - `HomeViewModel.uiState` gained an `impactStats: ImpactStats` field, populated in the same
+    `.map` that already builds `recentReports`, so it's still one Flow -> one `stateIn` — no extra
+    collection, no extra Firestore listener.
+  - `ProfileViewModel` did not previously expose the reports list, so a new `impactStats:
+    StateFlow<ImpactStats>` was added there, derived from `authRepository.currentUser` via
+    `flatMapLatest` into `reportRepository.getReportsForUser(uid)` (falling back to `flowOf(emptyList())`
+    when there's no signed-in uid), then `.map { it.toImpactStats() }`. This mirrors the existing
+    `flatMapLatest`-on-scope pattern already used in `ReportsListViewModel`.
+  - New reusable composable `ui/components/StatsRow.kt`: a `Row` of two tiles (`StatTile`, a private
+    `RowScope` receiver composable so `Modifier.weight(1f)` splits the row evenly). Icons:
+    `Icons.Filled.Assignment` for "Reports Filed" tinted with `MaterialTheme.colorScheme.primary` /
+    `primaryContainer`, and `Icons.Filled.CheckCircle` for "Resolved" tinted with the existing
+    `StatusResolvedLight`/`StatusResolvedDark` (+ container variants) civic status colors already
+    used by `StatusBadge`, so the "resolved" concept reads visually consistent everywhere in the app
+    rather than inventing a new green.
+  - Empty state: since counts come from `Int`, `0 Reports Filed` / `0 Resolved` render naturally as
+    "0" tiles rather than a special-cased empty state or crash — no conditional branching needed in
+    the composable, verified this is the default when a user has no reports yet (fresh account).
+  - `AdminReportsScreen` and `ReportsListScreen` were intentionally left untouched — stats are a
+    Home/Profile self-service feature only, not part of the admin/general reports list views.
+
+## 2026-08-03 - Multi-language support (Spanish) - bonus feature
+
+Implemented real, working multi-language support rather than a cosmetic toggle, addressing the
+assignment brief's explicit bonus-feature callout for localization.
+
+**Scope of localization (deliberately curated, not a full sweep):**
+Rather than mechanically extracting every string in the app (low marginal value, high risk of
+missed call sites), a small, high-visibility subset of user-facing strings was chosen so a marker
+can switch languages and immediately see the change across the app's most-used flows:
+- Bottom navigation labels (`MainActivity.kt` `BottomNavItem` list): Home, Reports, My Reports,
+  Profile, Admin.
+- Auth flow: the shared `AuthBrandHeader` (app title, logo description), `LoginScreen` (Welcome
+  back / subtitle / Email / Password / Remember me / Log In / register prompt), and
+  `RegisterScreen` (Create account / subtitle / Display name / Email / Password / Confirm password
+  / Register / login prompt).
+- `HomeScreen`: top bar title, the primary "Report an Issue" CTA, the shake tip, "Recent activity"
+  heading, and the empty-state title/message.
+- `SettingsScreen`: shake-sensitivity card title/description/current-threshold label, the new
+  language picker, and the Permission Dashboard navigation row label.
+
+These strings were moved out of hardcoded Kotlin `Text("...")` literals into
+`res/values/strings.xml` as named resources (e.g. `nav_home`, `login_welcome_back`,
+`home_report_issue_button`, `settings_language_title`) and every call site now uses
+`stringResource(R.string.xxx)`. `AppTopBar`/`PrimaryActionButton`/`EmptyState`/`NavigationRow`
+signatures were untouched (they already accept plain `String`, so no other call sites needed
+updates).
+
+**Locale added:** Spanish (`res/values-es/strings.xml`), chosen because it's the most common,
+easiest-to-verify second-language choice for demoing Android locale switching, with real,
+hand-written translations (not machine-garbled placeholders) for every extracted string.
+
+**Runtime switching API:** `androidx.appcompat.app.AppCompatDelegate.setApplicationLocales()` with
+`androidx.core.os.LocaleListCompat` (AndroidX per-app language API) - confirmed available since
+`androidx-appcompat = 1.7.0` is already a project dependency and the app's `minSdk = 28` is well
+within AppCompat's supported range (works natively on API 33+, and via AppCompat's own storage
+shim on older API levels, so behavior is consistent regardless of device OS version). Selecting
+"English" calls `setApplicationLocales(LocaleListCompat.forLanguageTags("en"))`, "Español" calls
+the same with `"es"`. AppCompat persists this choice itself across process restarts.
+
+**Persistence:** A new `languageTagFlow` / `setLanguageTag()` pair was added to the existing
+`ShakePreferences` DataStore class (same `shake_settings` Preferences DataStore already used for
+shake sensitivity), storing the selected tag under a new `app_language_tag` string key. This
+mirrors AppCompat's own locale persistence purely so `SettingsScreen` can read back the current
+selection through the same `StateFlow` pattern already used for the sensitivity slider - the
+actual runtime locale survives process death via AppCompat's own mechanism regardless.
+
+**UI:** `SettingsScreen` gained a new "Language" card with two `FilterChip`s ("English" /
+"Español") using existing Material3 components, consistent with the shake-sensitivity card's
+layout and typography above it - no new custom styling introduced.
+
+---
+
+## 2026-08-03 - Photo Annotation in Capture Flow
+
+- **Feature**: In the Capture flow's PREVIEW stage (photo just taken, before Confirm), the user
+  can now draw freehand markup directly on top of the captured photo to point at or circle the
+  specific issue (e.g. circling the exact pothole in a street photo, or the exact crack in a wall)
+  before the photo is analyzed and submitted.
+- **Why this matters for Functionality (30%)**: A raw photo of "a street" is often ambiguous about
+  which specific defect is being reported, especially in wide shots with multiple candidate issues
+  in frame. Letting the reporter annotate closes that ambiguity gap without requiring a text
+  description, and the annotation becomes part of the permanent photo record (baked into the
+  actual file), not just a disposable on-screen sketch.
+- **Why this matters for UI/UX (30%)**: The interaction is a single continuous gesture set
+  (drag to draw, tap Undo/Clear to fix mistakes) placed directly on the photo the user is already
+  looking at, with clearly discoverable icon buttons next to the photo rather than a separate
+  "annotate" mode/screen. No extra screen or dialog is introduced - it's an additive overlay on
+  the existing Retake/Confirm review step, minimizing new UI surface to learn.
+- **Implementation**:
+  - `ui/capture/CaptureScreen.kt` `PreviewStep`: added a `Canvas` overlay (via `pointerInput` +
+    `detectDragGestures`) on top of the existing `AsyncImage` preview. Strokes are accumulated as
+    a `mutableStateListOf<List<Offset>>` of raw on-screen pixel points - purely transient
+    Compose-local UI state, not pushed into `CaptureViewModel`, since it has no meaning once the
+    screen is gone (either baked into the file, or discarded).
+  - Drawn in a fixed bright red (`0xFFFF2D14`) at ~1.2% of image width stroke thickness, chosen
+    deliberately different from the app's existing amber/blue theme colors so it reads clearly
+    against arbitrary photo backgrounds (skies, roads, foliage) in a demo recording.
+  - Two icon buttons ("Undo last stroke", "Clear") sit directly under the photo, disabled when
+    there's nothing to undo/clear, so a stray line can be corrected without retaking the whole
+    photo.
+  - `util/PhotoAnnotator.kt` (new): `bakeStrokesIntoFile` takes the accumulated strokes
+    (normalized to 0f..1f fractions of the on-screen canvas, decoupling them from actual bitmap
+    resolution), decodes the real JPEG via `BitmapFactory`, scales each normalized point back up
+    against the *actual* bitmap's width/height (handles the on-screen-preview vs full-resolution
+    mismatch), draws the same strokes with `android.graphics.Canvas`/`Paint`, and re-encodes over
+    the original file path.
+  - On Confirm: if no strokes were drawn, `PhotoAnnotator` is skipped entirely and
+    `onConfirmCapture()` runs exactly as before (no redundant re-encode/quality loss for the common
+    "no annotation" case). If strokes exist, the bake runs on `Dispatchers.IO` first (with a brief
+    loading state on the Confirm button), then the existing, unmodified
+    `CaptureViewModel.onConfirmCapture()` flow (EXIF stripping, location/heading, ML
+    Kit/Gemma classification) proceeds against the now-annotated file - so both the AI
+    classification and the final stored/uploaded photo reflect the user's markup.
+  - `CaptureViewModel` was not restructured: it already read the photo from `File`/`Uri` in
+    `CaptureUiState`, and since the annotation overwrites that same file in place, no ViewModel
+    signature changed.
+
+---
+
+## 2026-08-03 — Search on Reports List (Functionality + UI/UX)
+
+- **What was built**: Added a search field (`ReportSearchField`, `OutlinedTextField` with a leading
+  search icon and a clear (X) trailing icon shown only when text is present) above the existing
+  `ReportFilterBar` on all three report-list surfaces that share the filter/sort pipeline: the main
+  Reports tab (`ReportsListScreen`, scope `ALL`), My Reports (`MyReportsScreen`, which reuses
+  `ReportsListScreen` with scope `MINE`), and the Admin Reports screen (`AdminReportsScreen` /
+  `AdminReportsViewModel`), which turned out to share the same `ReportFilterState` /
+  `applyFilter()` logic from `ReportListComponents.kt` rather than duplicating it — so the same
+  change extended cleanly to all three with no new composables invented beyond the search field
+  itself, consistent with the design-system-reuse rule.
+- **Why this design**: Chose the plain `OutlinedTextField` approach over Material3's `SearchBar`
+  to stay visually consistent with the rest of the app's form fields (report note field, auth
+  screens) rather than introducing a second, differently-styled search affordance.
+- **How search composes with filters**: `ReportFilterState` gained a `searchQuery: String` field
+  (default `""`, so all existing call sites constructing `ReportFilterState()` are unaffected).
+  `List<Report>.applyFilter()` now runs the case-insensitive substring match against `address` and
+  `note` as an additional `.filter { }` stage alongside the existing status/category filters, so a
+  user can combine e.g. "status = Submitted" AND "category = Pothole" AND "search = 'main st'"
+  simultaneously — search composes with, rather than replaces, the existing filter/sort pipeline.
+  No ViewModel logic changes were needed beyond this: both `ReportsListViewModel.onFilterChange`
+  and `AdminReportsViewModel.onFilterChange` already accepted the full `ReportFilterState`, so
+  wiring the search field's `onQueryChange` through `uiState.filter.copy(searchQuery = query)` was
+  sufficient.
+- **Scope decision — client-side filtering only**: Search matches against whatever the ViewModel
+  has already loaded from Firestore (via the existing `getAllReports()` / `getReportsForUser()`
+  flows) rather than adding a new Firestore query. Firestore does not support native full-text
+  search, and standing up a real search backend (Algolia/Typesense/Cloud Function-backed search
+  index) is explicitly out of scope for this project. Documented as a scoped limitation, not a
+  bug, in `PLACEHOLDERS_TODO.csv`.
+- **Empty-state UX**: Reused the existing `EmptyState` component's `title`/`message` parameters to
+  distinguish "genuinely no reports yet" (title "Nothing here yet", the component's default) from
+  "no reports match your current search/filters" (title "No matching reports", with copy
+  suggesting the user adjust their search or filters). This is driven by a new
+  `ReportFilterState.isActive` extension property (true if any of status filter, category filter,
+  or a non-blank search query is set), computed purely from UI state with no extra ViewModel
+  plumbing needed.
+
+## 2026-08-03 — Firebase Crashlytics + Android 12+ Splash Screen (Non-Functional Requirements)
+
+- **Crashlytics setup**: Added the Firebase Crashlytics Gradle plugin (`com.google.firebase.crashlytics`,
+  version catalog entry `crashlyticsPlugin`) applied in `app/build.gradle.kts` alongside the
+  existing `google-services` plugin, and declared `apply false` in the root `build.gradle.kts`
+  following the same alias-from-version-catalog pattern already used for AGP/Kotlin/KSP/Hilt.
+  Added `firebase-crashlytics-ktx` as a new `[libraries]` entry with no separate version (resolved
+  via the existing `firebase-bom` platform already applied in `app/build.gradle.kts`), matching
+  the pattern of `firebase-auth`/`firebase-firestore`/`firebase-messaging`.
+- **CrashReporter (`util/CrashReporter.kt`, new)**: A thin object wrapper around
+  `FirebaseCrashlytics.getInstance()` so ViewModels/Repositories don't take a direct Firebase
+  dependency and so the "what counts as PII" rule lives in one place. Exposes `initialize()`,
+  `setUserId(uid)`, `log(message)`, and `recordException(throwable)`.
+- **Wiring**: `MobAppAssignment.onCreate()` (the `Application` class) calls
+  `CrashReporter.initialize()` (enables collection) and then launches a coroutine on the existing
+  app-scoped `CoroutineScope` that collects `AuthRepository.currentUser` and calls
+  `CrashReporter.setUserId(user?.uid)` on every change (including `null` on logout, which clears
+  the Crashlytics user id). Only the Firebase `uid` is ever passed - never `email` or
+  `displayName` - so crash reports can be correlated to a user's session without logging PII, per
+  the task's explicit constraint. This reused the pre-existing `appScope`/`ConnectivityObserver`
+  collector pattern already in `MobAppAssignment.kt` rather than introducing a second scope.
+- **Breadcrumbs**: Added `CrashReporter.log(...)` calls (not a restructure of existing error
+  handling) at the two points in the report-submission pipeline most useful for diagnosing
+  real-world crash/failure reports:
+  - `CaptureViewModel.doSubmit()`: logs before calling `reportRepository.submitReport(...)`, logs
+    success, and on failure logs + calls `recordException` with the underlying `Throwable` before
+    falling back to the existing local `PendingReportEntity` queue path (unchanged).
+  - `ReportRepositoryImpl.createReport()`: the previously bare `docRef.set(...).await()` call is
+    now wrapped in `try/catch` that logs a breadcrumb + `recordException`s the failure, then
+    rethrows so the existing `runCatching { ... }` around the whole function (and all downstream
+    online/offline branching in `submitReport`/`CaptureViewModel`) behaves exactly as before -
+    this only adds observability, it does not change control flow.
+- **Android 12+ Splash Screen**: Added `androidx.core:core-splashscreen` via the version catalog
+  (`coreSplashscreen` version, `androidx-core-splashscreen` library entry). Created
+  `Theme.Mob_app_assignment.Splash` in both `res/values/themes.xml` and `res/values-night/themes.xml`,
+  parented on `Theme.SplashScreen`, using:
+  - `windowSplashScreenBackground` = `@color/civic_blue_dark` (the app's existing deep civic blue,
+    already used as the app's `android:windowBackground`/status bar color in the base theme, so
+    there's no visual seam between the splash and the app's own cold-start background).
+  - `windowSplashScreenAnimatedIcon` = the existing `@drawable/ic_app_logo` vector (shield + GPS pin
+    logo created in an earlier phase) rather than inventing a new asset.
+  - `windowSplashScreenIconBackgroundColor` = the same civic blue, so the icon reads cleanly against
+    the background on API levels/OEM skins that render the icon in a masked circle.
+  - `postSplashScreenTheme` = `@style/Theme.Mob_app_assignment` so control immediately hands off to
+    the app's real theme once the splash dismisses.
+  - `AndroidManifest.xml`'s `MainActivity` `android:theme` was changed to the new
+    `Theme.Mob_app_assignment.Splash` (the app-level `<application>` theme is untouched).
+  - `MainActivity.onCreate()` calls `installSplashScreen()` as the literal first line, before
+    `super.onCreate(savedInstanceState)`, per the real SplashScreen API contract (calling it after
+    `super.onCreate()` is a documented misuse that can no-op the theme swap). No artificial delay
+    was added - the splash dismisses as soon as the first frame is ready, satisfying "keep it
+    simple" scope.
+
+---
+
+## 2026-08-03 — Interaction Polish phase (haptics + confirmation dialogs)
+
+- **Haptic feedback** (`androidx.compose.ui.hapticfeedback.HapticFeedbackType`, via
+  `LocalHapticFeedback.current`): added at the two most meaningful, demo-visible touchpoints per
+  explicit task scoping, rather than sprinkling haptics across every button (which would read as
+  excessive rather than purposeful):
+  - **Shake-trigger** (`MainActivity.kt`, inside the existing `LifecycleStartEffect` that collects
+    `shakeDetector.onShakeDetected()`): fires `HapticFeedbackType.LongPress` the instant a shake is
+    detected, right before navigating to `Destinations.CAPTURE` — gives the user immediate physical
+    confirmation that the shake gesture registered, which matters most for a gesture-based trigger
+    since there's otherwise no visual feedback until the camera intent opens a beat later.
+  - **Submit success** (`CaptureScreen.kt`, in the `LaunchedEffect(uiState.stage)` that watches for
+    `CaptureStage.SUBMITTED`): fires the same `HapticFeedbackType.LongPress` right before calling
+    `onSubmitted()`, marking the successful end of the report flow.
+  - Verified `HapticFeedbackType.LongPress` is a real constant in this project's Compose BOM
+    (`composeBom = "2024.12.01"` in `gradle/libs.versions.toml`) rather than assuming it exists —
+    confirmed via its use compiling successfully in both files. Deliberately did **not** add haptics
+    to the Retake/Confirm/Submit button presses themselves: the task offered a lighter
+    `HapticFeedbackType` as an option for ordinary taps if one exists, but the more conservative,
+    explicitly-endorsed fallback ("a single consistent type applied only to the meaningful moments
+    listed... is an acceptable, more conservative scope") was chosen instead, keeping the two
+    shake-trigger/submit-success moments as the only haptic touchpoints in the app.
+- **Logout confirmation dialog** (`ui/profile/ProfileScreen.kt`): the existing Logout `OutlinedButton`
+  no longer calls `viewModel.logout()`/`onLoggedOut()` directly from its `onClick`. It now only sets a
+  local `showLogoutConfirm` boolean (`remember { mutableStateOf(false) }` — deliberately not lifted
+  into `ProfileViewModel`, since it is pure UI presentation state with no business logic or
+  persistence behind it) which shows a Material 3 `AlertDialog` styled identically to the existing
+  duplicate-report dialog pattern already established in `CaptureScreen.kt` (plain `TextButton`s for
+  confirm/dismiss, no custom colors beyond a plain-text confirm action). Copy: "Log out?" / "You'll
+  need to sign in again to file or view your reports." Only the dialog's confirm action calls
+  `viewModel.logout()` then `onLoggedOut()`; cancel just dismisses the dialog with no side effects.
+- **Other destructive actions reviewed, none added**: checked the photo-annotation "Clear" button
+  (`CaptureScreen.kt`'s `PreviewStep`) and the Capture screen's back navigation. Annotation "Clear"
+  was judged low-stakes (freehand strokes only, instantly redrawable, no data loss beyond a doodle)
+  and was left without a confirmation, per the task's explicit "do not over-scope this" instruction.
+  Discarding an in-progress capture via the back button (mid `PREVIEW`/`FORM` stage) has **no**
+  confirmation dialog either — this was assessed as a reasonable low-effort addition but intentionally
+  left out to keep this phase's primary/only confirmation-dialog target as Logout, matching the task's
+  explicit "logout is the primary target for this phase" framing. Logged as an optional follow-up row
+  in `PLACEHOLDERS_TODO.csv` rather than silently adding scope.
+- **Files touched**: `MainActivity.kt`, `ui/capture/CaptureScreen.kt`, `ui/profile/ProfileScreen.kt`.
+  No ViewModel public function signatures were changed; `ProfileViewModel.logout()` and
+  `CaptureViewModel`'s existing stage transitions are called exactly as before, just gated by new
+  purely-UI state (`showLogoutConfirm`) or observed passively (haptic fire is a side effect alongside
+  the existing `LaunchedEffect` logic, not a new state transition).
+
+---
+
+## 2026-08-03 - Report Lifecycle: owner edit/delete while SUBMITTED + pending-reports nav badge
+
+**What was built:**
+
+- **Edit own report (owner-only, SUBMITTED-only)**: Added `ReportRepository.updateReport(id, category, note)`,
+  implemented in `ReportRepositoryImpl` as a targeted Firestore `.update()` restricted to the
+  `category`/`note` fields only. `ReportDetailScreen` now shows an Edit icon in the `AppTopBar`
+  actions slot when the signed-in user is the report's owner and its status is still `SUBMITTED`.
+  Tapping it swaps the category/note display into an inline editable form (reusing the existing
+  `CategoryChip` row and a note `OutlinedTextField`, mirroring the pattern already used in
+  `CaptureScreen`) with Save/Cancel actions, rather than a separate screen/nav route - the existing
+  `ReportDetailScreen` structure made inline editing simpler and equally usable.
+  Photo, GPS location/address, heading, and capture timestamp are intentionally NOT editable -
+  they are the evidentiary capture of the report and must stay immutable; only the citizen's
+  classification (category) and free-text note are reasonably correctable before review.
+
+- **Delete own report (owner-only, SUBMITTED-only)**: Added `ReportRepository.deleteReport(id)`
+  using Firestore `.delete()`. A Delete icon sits next to Edit in the top bar under the same
+  visibility condition. Deleting prompts an `AlertDialog` ("Delete this report? This cannot be
+  undone.") before calling through to the ViewModel; on success the screen navigates back via
+  the existing `onBackClick` callback (driven by a `LaunchedEffect` watching an `isDeleted` flag
+  in `ReportDetailUiState`, so navigation and side-effectful deletion stay decoupled from the
+  Compose recomposition itself).
+
+- **Firestore rules tightened**: previously any signed-in owner (or admin) could update *any*
+  field of their own report at any status, and delete was globally disabled
+  (`allow delete: if false`). The `update` rule now requires, for non-admin owners: the report is
+  still `status == 'SUBMITTED'`, the incoming write does not change `status`, and
+  `request.resource.data.diff(resource.data).affectedKeys()` contains only `category`/`note` -
+  enforced server-side via Firestore's field-diffing so the restriction can't be bypassed by a
+  modified client. Admins keep their existing permissive update branch (they change status via a
+  separate, already-existing path). The new `delete` rule allows only the owner, and only while
+  `status == 'SUBMITTED'` - admins deliberately do NOT get delete rights, since once a report is
+  in the system an admin's job is to resolve/track it, not remove it; deletion is purely a
+  citizen "I made a mistake" self-service action on a not-yet-reviewed report.
+
+- **Pending-reports nav badge**: Added a small `PendingReportsBadgeViewModel` (Hilt-injected,
+  scoped to `MainScaffold`) that maps the current user's `getReportsForUser` flow (the same one
+  used elsewhere) to a count of reports with `status == SUBMITTED`. `MainScaffold`'s bottom
+  `NavigationBar` now wraps the "My Reports" `NavigationBarItem` icon in a Material3
+  `BadgedBox`/`Badge` showing that count, hidden entirely when it is zero, so a citizen can see
+  at a glance how many of their reports are still awaiting review without opening the tab.
+
+**Why (maps to marking criteria):**
+
+- *Functionality*: closes the loop on report ownership - citizens are not stuck with a
+  mis-categorized report or an accidental duplicate submission until an admin acts on it; they
+  can self-correct or self-withdraw while it's still unreviewed.
+- *UI/UX*: inline edit affordance keeps the interaction on one screen rather than forcing a
+  navigation detour; the delete confirmation dialog and back-navigation-on-delete follow patterns
+  already used elsewhere in the app (e.g. the existing duplicate-report/logout confirmation
+  dialogs), keeping the interaction model consistent. The nav badge surfaces "reports awaiting
+  review" status ambiently, without requiring a tab visit.
+- *Non-functional requirements*: the Firestore rules change is a genuine security hardening -
+  previously a compromised/modified client could rewrite any field (including status, or another
+  user's report metadata) as long as it matched `resource.data.userId`; the new field-diff-scoped
+  rule closes that gap while still allowing the intended self-service edit/delete flows.
+
+---
+
+## 2026-08-03 — First-launch onboarding walkthrough
+
+- **What was built**: A 3-page swipeable onboarding walkthrough (`ui/onboarding/OnboardingScreen.kt`)
+  shown once, on first launch only, before the existing auth/main navigation graphs run. Built with
+  Compose Foundation's `HorizontalPager` (already available transitively via the project's
+  `composeBom = 2024.12.01`, so no new Gradle dependency was needed).
+  - Page 1: app logo (`ic_app_logo`) + "Report civic issues in seconds" + supporting copy.
+  - Page 2: `Icons.Filled.Vibration` (verified present in the already-included
+    `material-icons-extended` artifact) + "Just shake your phone" + copy on the shake-to-report flow.
+  - Page 3: `Icons.Filled.TrackChanges` (also verified present) + "Track every report" + copy on
+    status updates / My Reports.
+  - A dot page indicator, a top-right "Skip" text button, and a `PrimaryActionButton` that reads
+    "Next" on pages 1-2 and "Get Started" on page 3, advancing the pager or completing onboarding.
+- **Persistence**: `util/OnboardingPreferences.kt` follows the exact same DataStore Preferences
+  pattern as the existing `ShakePreferences` (separate `preferencesDataStore(name = "onboarding_settings")`,
+  a `booleanPreferencesKey`, a `Flow` exposed for Compose `collectAsState`, and a suspend setter).
+  The flag `has_completed_onboarding` is written once the user finishes or skips the walkthrough,
+  so it is shown exactly once per install.
+- **Navigation wiring**: `Destinations.ONBOARDING` / `Destinations.ONBOARDING_GRAPH` were added.
+  `MainActivity`'s `RootNavGraph` now computes its start destination as: onboarding graph if the
+  DataStore flag has resolved to `false`; otherwise falls through to the pre-existing
+  `isLoggedIn ? MAIN_GRAPH : AUTH_GRAPH` logic completely unchanged. The onboarding graph's single
+  screen navigates to `MAIN_GRAPH` or `AUTH_GRAPH` (matching current login state) with
+  `popUpTo(ONBOARDING_GRAPH) { inclusive = true }` once finished, so it is fully removed from the
+  back stack and never re-shown via back navigation.
+- **Design system reuse**: reuses `PrimaryActionButton` for the CTA, `AppTheme` colors/typography for
+  all text and the active/inactive indicator dots, and the same logo asset as the auth screens - no
+  new raw Material3 styling was introduced, so the flow reads as part of the existing app rather than
+  a bolted-on splash sequence.
+- **i18n**: All onboarding copy was added to both `values/strings.xml` and `values-es/strings.xml`,
+  consistent with the app's existing English/Spanish support.
+- **Maps to marking criteria**: Functionality (first-run experience, shown-once guarantee via
+  persisted DataStore flag); UI/UX (consistent design language, swipeable/skippable/discoverable
+  flow, dot indicator, clear CTA copy); Non-Functional Requirements (no added dependency footprint,
+  reuses existing local-preferences persistence pattern rather than inventing a new one).
+
+---
+
+## 2026-08-03 — Background AI classification (non-blocking submit + AI-disagreement review flow)
+
+- **Motivation**: previously, AI category classification (Gemma vision LLM, falling back to
+  on-device ML Kit) ran synchronously during the Capture flow's "Analyzing" step, between photo
+  confirm and the category-selection form. This added real wall-clock delay to every single
+  report submission - the exact opposite of the app's core pitch (speed is why people don't
+  report civic issues). The user asked for AI to run in the background so it never blocks
+  submission, and for a review workflow when the AI's opinion doesn't match what the citizen chose.
+- **Flow change**: `CaptureViewModel.onConfirmCapture()` no longer calls the classifier at all -
+  it now only waits on location/heading (both fast local device reads, not a network/model call).
+  The category picker on the confirm form is unchanged (still a required manual chip selection),
+  but the "low-confidence AI suggestion" hint text was replaced with a short explanatory line:
+  "AI will double-check this after you submit - if it disagrees, you'll be asked to review it."
+- **`AiReviewCoordinator`** (new, `ai` package): invoked from `CaptureViewModel.doSubmit()`
+  immediately after a successful Firestore write, but scheduled on an **app-scoped**
+  `CoroutineScope` (see below) rather than `viewModelScope` - classification must keep running
+  even after the user navigates away from `CaptureScreen`, which `viewModelScope` would cancel.
+  It runs the existing `CategoryClassifier` (Gemma-first, ML Kit fallback - unchanged) against
+  the photo, and compares the result to what the user picked:
+  - If the AI agrees (same category, confidence ≥ 0.5) — nothing happens, silently.
+  - If the AI disagrees, is low-confidence, or fails entirely (classifier unreachable/timeout) —
+    the report is flagged via `Report.needsAiReview = true` and `Report.aiSuggestedCategory`
+    (null if the classifier simply couldn't produce an answer, set to the AI's pick otherwise).
+- **New Hilt module `di/AppScopeModule.kt`**: provides a singleton `CoroutineScope(SupervisorJob())`
+  injectable anywhere. `MobAppAssignment`'s existing offline-sync collector was refactored to use
+  this injected scope instead of constructing its own, so there is exactly one app-lifetime scope
+  in the whole app, not two separate ones that happened to serve similar purposes.
+- **Domain model**: added `Report.aiSuggestedCategory: ReportCategory?`,
+  `Report.needsAiReview: Boolean`, `Report.wasResubmittedAfterAiReview: Boolean` - the last field
+  is a permanent audit marker (see PLACEHOLDERS_TODO.csv), never cleared back to false once set.
+- **Repository**: added `ReportRepository.flagForAiReview(id, aiCategory)` (called by the
+  coordinator) and `resubmitAfterAiReview(id, category, note)` (called when the citizen corrects
+  and resubmits - clears `needsAiReview`, sets `wasResubmittedAfterAiReview = true`, updates
+  category/note in the same write). `ReportDetailViewModel.saveEdit()` now branches: if the report
+  currently has `needsAiReview == true`, it calls `resubmitAfterAiReview` instead of the existing
+  `updateReport` - reusing the exact same inline edit UI (category chips + note field) that was
+  already built for the ordinary "citizen edits their own SUBMITTED report" feature, rather than
+  building a second, parallel edit screen.
+- **UI surfacing**: `ReportDetailScreen` shows a red-tinted card ("AI review needed" + the AI's
+  suggested category, or "couldn't confidently classify" if it had no opinion) with a
+  "Review and resubmit" button when `needsAiReview` is true and the viewer is the owner.
+  `ReportListItem` shows a small warning icon next to the status badge for flagged reports.
+  `ReportsListScreen`, when scoped to "My Reports" only (not the general Reports tab or Admin),
+  shows a "⚠ Needs your input" filter chip that isolates just the flagged reports, reusing the
+  exact same `ReportFilterState`/`applyFilter()` pipeline already built for status/category/search
+  filtering (added one new boolean field, `needsAiReviewOnly`, to that existing state).
+- **Security rules**: `firestore.rules`' owner-update clause widened from
+  `hasOnly(['category', 'note'])` to also permit `needsAiReview`, `aiSuggestedCategory`, and
+  `wasResubmittedAfterAiReview` as owner-writable fields, still gated on `status == 'SUBMITTED'`
+  and still forbidding the owner from touching `status` itself. There is no separate
+  server-side/service-account identity for the app's own background AI-flagging write - it goes
+  through the same client SDK as any other user action, so it must be covered by the owner rule.
+- **Known scoped limitation**: reports submitted while offline (queued in Room, no Firestore id
+  yet) do not get AI-reviewed even after `syncPendingReports()` later uploads them - logged in
+  PLACEHOLDERS_TODO.csv as a low-priority follow-up, not fixed now to avoid introducing a
+  circular dependency between the `ai` and `data.repository` packages for a coursework-scope edge
+  case (most testing/demo submissions will be online).
+- **Report framing**: this is a strong example for Section 5.3 (Features - AI integration) and
+  Section 4 (Non-Functional Requirements - "efficient performance", since it removes a real
+  blocking network/model call from the critical submit path) and Section 5.7 (a deliberate
+  architecture change made in response to a UX problem, not a bug fix).
+- Verified with `compileDebugKotlin` (BUILD SUCCESSFUL).
+
+---
+
+## 2026-08-04 — Fixed "submitted report shows as 0 / doesn't appear" bug + optional category at submit
+
+- **Bug report**: user reported that after submitting an issue, it never showed up anywhere in
+  the app and impact stats stayed at 0.
+- **Root cause found**: `CaptureViewModel.doSubmit()` displayed the identical "Submitted" success
+  state regardless of whether `ReportRepository.submitReport()` actually reached Firestore or
+  silently fell back to the local-only Room `PendingReportEntity` queue (which happens on *any*
+  Firestore write failure - permission error, no connectivity, a missing composite index, etc,
+  not just genuine offline mode). Reports in that local queue are invisible everywhere else in the
+  app, since Home/My Reports/Admin all read from live Firestore snapshot listeners - so a failed
+  submission looked exactly like a successful one, with the report silently stuck on-device.
+- **Fix**: `HomeViewModel` now also observes `PendingReportDao.getAll()` alongside the existing
+  Firestore-backed reports Flow, exposing a `pendingSyncCount`. `HomeScreen` shows a visible
+  "Waiting to sync" card ("N reports saved on this device only - they'll upload automatically once
+  you're back online") whenever that count is greater than zero. This makes the previously-silent
+  local-queue fallback path visible for the first time - a real reliability/UX fix, not just a
+  workaround, and a good example for Section 5.6 (Testing) of a bug that was only discoverable
+  through real device usage, not compilation.
+- **Diagnosis note for future reference**: if a user reports "0 reports" again and this new banner
+  is *not* showing, the report never even reached the local queue - check Firestore
+  auth/permission state directly (Logcat, or the Firebase console's Firestore usage/rules debug
+  view) rather than assuming it's the same root cause.
+- **Separately requested in the same session**: category selection is no longer mandatory to
+  submit a report. Added `ReportCategory.UNCATEGORIZED` (excluded from every category-picker UI via
+  a new `ReportCategory.selectableEntries` list, but still visible/filterable in report lists with
+  its own icon and label). If the user skips the category picker, the report submits immediately
+  as `UNCATEGORIZED`, and `AiReviewCoordinator` (already built for the background-AI-review
+  feature) now has a second responsibility: when the report was `UNCATEGORIZED` and the AI produces
+  a confident classification, it sets the real category directly via a new
+  `ReportRepository.applyAiCategory()` method - no review flag needed, since the user never made a
+  choice to disagree with. If the AI can't confidently classify it either, it falls back to the
+  existing `needsAiReview` flag so the citizen fills it in manually from My Reports.
+- Verified with `compileDebugKotlin` (BUILD SUCCESSFUL).
+
+---
+
+## 2026-08-04 — Fixed inconsistent shake detection on real devices ("sometimes works, sometimes doesn't")
+
+- **Bug report**: shake-to-report worked intermittently on a real physical phone (confirmed not an
+  emulator quirk, since the emulator's simulated sensor doesn't exhibit this class of bug at all).
+- **Root causes found in `ShakeDetector.onSensorChanged`**:
+  1. The direction-reversal counter (`reversalCount`) was tallied inside a **fixed wall-clock
+     window** that reset every exactly 1000ms regardless of shake activity
+     (`windowStartTime == 0L || now - windowStartTime > WINDOW_MS`). A genuine shake gesture could
+     have its accumulated reversals discarded mid-gesture purely because the window happened to
+     tick over at that moment - a real shake starting near the end of a window would lose credit
+     for reversals from before the reset, needing to start over. This produced exactly the
+     "sometimes works, sometimes doesn't" symptom, since it depended on arbitrary timing rather
+     than the actual physical motion.
+  2. The magnitude gate used to **count** a reversal was half the real threshold
+     (`thresholdMs2 / 2f`), but the gate used to **trigger** the shake was the full threshold
+     (`thresholdMs2`) - two different, inconsistent bars that made the two conditions
+     (`reversalOk`, `magnitudeOk`) harder to satisfy together than either alone would suggest.
+  3. A proximity-sensor "pocket guard" (`isProximityCovered`) gated triggering entirely. On real
+     hardware (unlike the emulator's fake sensor), proximity sensors can report stale or
+     inconsistent "near" readings depending on phone model/orientation, which could silently and
+     permanently block shake detection with no way for the user to tell why.
+- **Fix**: rewrote the detection loop to use a **rolling deadline** instead of a fixed window -
+  each qualifying reversal extends `lastReversalTime` by `WINDOW_MS`, so reversal credit only
+  expires after real motion actually stops, not on an arbitrary clock tick. Unified the counting
+  and triggering magnitude gates to the same `thresholdMs2` value. Removed the proximity-sensor
+  gate entirely (rather than trying to make it "more forgiving") since it's an inherently
+  unreliable signal across different phone hardware, and the app already has a guaranteed-reliable
+  fallback: the manual "Report an Issue" button on Home, which was added specifically so the core
+  flow never depends on a gesture landing correctly (see the original Sensors & Capture phase
+  notes above).
+- **Verification note**: this is a hardware-timing bug class that cannot be fully verified by
+  `compileDebugKotlin` alone - it compiles clean, but confirming the *fix* requires retesting shake
+  on the same physical device that showed the original symptom. Logged in PLACEHOLDERS_TODO.csv as
+  "resolved, needs real-device retest to confirm" rather than a flat RESOLVED, since a sensor/timing
+  fix's correctness can only be fully confirmed empirically.
+- If shake still feels inconsistent after this fix, the next levers (in order of ease) are: lower
+  the shake-sensitivity threshold via the existing Settings slider, or relax/adjust `MIN_REVERSALS`
+  in `ShakeDetector`'s companion object.
+- Verified with `compileDebugKotlin` (BUILD SUCCESSFUL).
+
+---
+
+## 2026-08-04 — Fixed language setting not applying + added French + confirmed edit/delete gating
+
+- **Bug report**: switching the language in Settings had no visible effect - the app stayed in
+  English regardless of which chip was selected.
+- **Root cause**: `AppCompatDelegate.setApplicationLocales()` (the AndroidX per-app-language API)
+  only automatically recreates the hosting Activity when that Activity extends
+  `AppCompatActivity`. This app's `MainActivity` is a plain `ComponentActivity`, since the whole
+  app is Compose-first with no other reason to depend on AppCompat's Activity base class. The
+  locale preference *was* being persisted correctly (both in the app's own DataStore and
+  AndroidX's internal per-app-locale store), but nothing ever told the running Compose UI to
+  re-resolve its `stringResource()` calls against the new locale - it silently kept rendering
+  whatever locale was active when the process last cold-started, which is indistinguishable from
+  "doesn't work" to a user clicking the language chips and seeing no change.
+- **Fix**: `SettingsViewModel` now exposes a `recreateActivityEvents: SharedFlow<Unit>`, emitted
+  immediately after calling `setApplicationLocales()`. `SettingsScreen` collects this via
+  `LaunchedEffect` and calls `(LocalContext.current as ComponentActivity).recreate()` - this
+  forces Compose to tear down and rebuild against the new locale immediately, without requiring
+  the user to manually kill and relaunch the app (which would have "worked" too, but is not a
+  reasonable UX to depend on).
+- **French added**: alongside the existing English/Spanish support, added a third full
+  translation (`res/values-fr/strings.xml`, `LANGUAGE_TAG_FRENCH = "fr"`), covering the same
+  curated string subset as Spanish (bottom nav, auth screens, Home, Settings, onboarding) rather
+  than attempting a full app-wide sweep - consistent with the original scoping decision logged
+  when Spanish was added (see the earlier "Multi-language phase" section above). A third `FilterChip`
+  was added to `SettingsScreen`'s language picker.
+- **Edit/delete-while-not-yet-reviewed**: the user separately asked that citizens be able to
+  edit/delete their own report only if it hasn't been reviewed yet. This was already fully
+  implemented in an earlier session (see the Report Lifecycle phase notes above) -
+  `ReportDetailScreen`'s `canEditOrDelete = uiState.isOwner && report.status == SUBMITTED`,
+  enforced both client-side and via `firestore.rules`. No code change was needed; confirmed
+  correct and re-verified as part of this fix pass rather than silently assuming it was fine.
+- **Verification note**: like the shake-detection fix, the locale-recreate fix is best confirmed
+  on a real device (toggle a language chip, confirm the UI text changes immediately without
+  needing to force-close the app) - logged as "resolved, needs device retest" rather than a flat
+  RESOLVED for the same reason.
+- Verified with `compileDebugKotlin` (BUILD SUCCESSFUL).
+
+---
+
+## 2026-08-04 — Replaced the map placeholder with a real interactive map (Geoapify + OSMdroid)
+
+- **Motivation**: the Reports Map tab had been a canvas-drawn relative dot-grid placeholder since
+  the Screens phase, logged at the time as needing a real Maps API key. The user has a Geoapify
+  API key (not Google Maps), which uses a different integration path - Geoapify provides raster
+  map tiles over a standard XYZ tile URL, not a native Android SDK the way Google Maps does.
+- **Library choice**: added OSMdroid (`org.osmdroid:osmdroid-android`), the standard open-source
+  Android map view library, which renders tiles from any configurable tile server URL. This is
+  the correct pairing for a tile-based provider like Geoapify - Google Maps Compose would not
+  have worked here since it's tied to Google's own tile/API backend, not an arbitrary URL.
+- **`map/GeoApiConfig.kt`** (new): single place holding the Geoapify API key and tile style,
+  building the `{z}/{x}/{y}` tile URL template - mirrors the existing `VisionAiConfig.kt` pattern
+  used for the Gemma vision API, so config-with-a-placeholder-key is a consistent pattern across
+  the app rather than one-off. **`API_KEY` is currently a literal placeholder string** - logged as
+  a Blocker-priority row in `PLACEHOLDERS_TODO.csv` since the map will show blank/gray tiles (pins
+  still render, since they're independent of the key) until a real key is pasted in.
+- **`ui/reports/ReportsMapScreen.kt`** (replaces the deleted `MapPlaceholderScreen.kt`): wraps
+  OSMdroid's classic View-based `MapView` via Compose's `AndroidView` interop. A private
+  `GeoapifyTileSource` (extends OSMdroid's `OnlineTileSourceBase`) builds the actual tile request
+  URL per zoom/x/y from `GeoApiConfig`. Report pins are colored by status using the exact same
+  `StatusSubmittedLight`/`StatusInReviewLight`/`StatusResolvedLight` colors `StatusBadge` already
+  uses elsewhere, so the map's color language matches the rest of the app rather than introducing
+  a new one. Tapping a marker calls the same `onReportClick` callback the list view already used -
+  `ReportsTabScreen`'s List/Map tab switch required no changes beyond swapping which composable
+  the Map tab renders.
+- **Lifecycle correctness**: `MapView` owns background tile-loading threads that must be explicitly
+  paused/resumed and detached, or they leak past the screen's lifetime (a real, if subtle, memory
+  leak that's easy to introduce when wrapping a classic Android View in Compose) - handled via
+  `DisposableEffect` calling `onResume()`/`onPause()`/`onDetach()` at the right points, tracking
+  the actual `MapView` instance through Compose state rather than assuming a single fixed instance.
+- **Not implemented / explicitly descoped**: no marker clustering for many nearby reports, no
+  "center on my location" button, no offline tile pre-caching beyond OSMdroid's automatic disk
+  cache of already-viewed tiles - reasonable scope for a coursework map feature; logged in
+  `PLACEHOLDERS_TODO.csv` under Geoapify free-tier rate limits as the one dimension worth watching
+  if the report list grows large.
+- Verified with `compileDebugKotlin` (BUILD SUCCESSFUL). Runtime map rendering cannot be verified
+  without a real Geoapify key in place - the next step for the user is pasting their real key into
+  `GeoApiConfig.API_KEY` and testing on a real device (map tiles need network + the OSMdroid tile
+  cache directory, both already covered by existing `INTERNET` permission and default app storage).
+
+## 2026-08-05 — Admin Workflow phase: department/priority triage + resolution-note close-the-loop
+
+- **Motivation**: the prior admin experience was a bare status dropdown (SUBMITTED -> IN_REVIEW
+  -> RESOLVED) with no triage, no explanation, and no record of what an admin actually did about
+  a report. This phase adds a genuine admin workflow on top of the Data Model phase's new
+  `department`/`priority`/`resolutionNote`/`resolutionPhotoPath` fields.
+- **Repository** (`ReportRepository`/`ReportRepositoryImpl`): added `assignDepartment(id, department)`
+  and `setPriority(id, priority)` as single-field Firestore `.update()` calls, and
+  `resolveWithNote(id, status, note, resolutionPhotoFile)` which writes `status` + `resolutionNote`
+  atomically in one `.update()` map, adding `resolutionPhotoPath` (the local file's absolute path -
+  no Firebase Storage, consistent with this project's device-local-only photo architecture) only
+  when a photo was attached. The original `updateReportStatus(id, status)` was kept (not deleted)
+  because the compact admin-list `StatusDropdown` still calls it directly for quick, no-note status
+  flips (e.g. reopening a report to SUBMITTED); `resolveWithNote` is the primary path for the
+  IN_REVIEW/RESOLVED transitions that matter for citizen feedback, called from the full admin
+  workflow UI on the report detail screen.
+- **Admin list (`AdminReportsScreen`)**: kept compact and glanceable per the task's explicit
+  instruction not to overcrowd list rows - each `ReportListItem`'s `trailingContent` now shows a
+  `DepartmentLabel` ("Unassigned" when null) and a `PriorityIndicator` (colored dot + label; LOW
+  greyed-out onSurfaceVariant, NORMAL default onSurfaceVariant, HIGH secondary theme color, URGENT
+  error/red - reusing existing theme colors rather than a bespoke palette) above the existing
+  `StatusDropdown`. Tapping a row still navigates to `ReportDetailScreen` unchanged - all full
+  editing controls live there.
+- **Report detail (`ReportDetailScreen`)**: added an `AdminWorkflowSection`, visible only when
+  `uiState.isAdmin`, with three parts: (1) a Department chip picker (`CategoryChip`-styled, tap to
+  toggle assign/unassign, calls `assignDepartment`); (2) a Priority chip row (`FilterChip` x4,
+  colored per the same dot-color scheme as the list); (3) a redesigned status control - selecting
+  the current status is a no-op, selecting IN_REVIEW/RESOLVED opens an inline resolution-note
+  `OutlinedTextField` (required non-blank, "Update status" button disabled until non-blank text is
+  entered) and, only when the target is RESOLVED, an optional "Attach photo" button using a direct
+  `ActivityResultContracts.TakePicture()` launcher (the same low-level FileProvider pattern
+  `CaptureScreen` uses, wired directly in this composable rather than detouring through the full
+  Capture nav destination/`CaptureViewModel`, which would have been poor UX for what should be a
+  quick admin action). Selecting a status that needs no note (i.e. reverting to SUBMITTED) still
+  goes straight through `resolveWithNote` with an empty note/no photo.
+- **ViewModel**: `ReportDetailViewModel.updateStatusWithNote(status, note, photoFile)` wraps
+  `resolveWithNote`, following the exact same `isSaving`-style flag pattern (`isUpdatingStatus`) the
+  existing `saveEdit()`/`deleteReport()` methods already use, so the "Update status" button shows a
+  loading state and cannot be double-submitted.
+- **Security**: no `firestore.rules` change was needed for this phase - admins already had
+  unrestricted field-level update rights via the existing `isAdmin()` branch of the reports
+  `allow update` rule (added in the Data Model phase), so `department`/`priority`/`resolutionNote`/
+  `resolutionPhotoPath` writes from an admin account are already correctly permitted, and a non-admin
+  citizen still cannot write any of these fields (their owner-update branch's `hasOnly([...])` list
+  was never widened to include them).
+- **Build-fix note**: while verifying this phase, found and fixed two real pre-existing compile
+  errors in the already-written code (not introduced by me, but blocking `compileDebugKotlin`):
+  (1) `ReportListComponents.kt`'s `ReportPriority.dotColor()` referenced `Color` without importing
+  `androidx.compose.ui.graphics.Color`, so `colorScheme.error` etc. resolved to the wrong `.copy()`
+  overload; (2) `ReportDetailScreen.kt`'s camera-capture `onClick` mutated `pendingCameraUri` (a
+  `mutableStateOf` delegate) and then immediately read it back in the same expression, which Kotlin
+  cannot smart-cast through a property delegate - fixed by capturing the freshly-built `Uri` in a
+  local `val` and using that for both the state assignment and the launcher call.
+- Verified with `compileDebugKotlin` (BUILD SUCCESSFUL) after the two fixes above.
+
+## 2026-08-05 - Citizen Feedback Loop phase
+
+This phase closes the loop back to the citizen who filed a report, building on the Data Model
+and Admin Workflow phases (which already added `department`, `priority`, `resolutionNote`,
+`resolutionPhotoPath`, `upvoteCount`, `upvotedByUids` to `Report` and the admin-side triage UI).
+
+**Functionality (30%)**
+- `ReportDetailScreen.kt`'s non-admin/read-only view now surfaces the admin's triage and
+  resolution directly to the citizen: a read-only Department/Priority row (reusing the existing
+  `DepartmentLabel`/`PriorityIndicator` composables from the Admin Workflow phase, just without
+  the click handlers), and - when `resolutionNote` is non-blank - an "Update from the city" card
+  showing the note text and, if present, the `resolutionPhotoPath` image via the same `AsyncImage`
+  pattern already used for the original report photo. This is the actual "closing the loop"
+  moment: a citizen who filed a pothole report and got it marked Resolved now sees *why* and,
+  optionally, a photo of the fix - not just a bare status badge flip.
+- Added `ReportRepository.toggleUpvote(id, uid): Result<Unit>` and its `ReportRepositoryImpl`
+  implementation: a plain read (`getReportById`-style single `get()`), then a conditional
+  add/remove of `uid` in `upvotedByUids` and a matching `upvoteCount` write derived from the new
+  list's size (not incremented/decremented independently, so count and array length can't drift
+  apart from this code path). This is a simple read-then-write, not a Firestore transaction - see
+  PLACEHOLDERS_TODO.csv for the accepted concurrency caveat.
+- Wired upvoting into two places, both reachable by any signed-in non-owner citizen:
+  1. `ReportDetailScreen` - a new `CitizenTriageAndUpvoteRow` card combining the read-only
+     department/priority display with the upvote control.
+  2. `ReportsListScreen` when `scope == ReportsScope.ALL` (the general "Reports" tab, not "My
+     Reports" and not the admin list) - a new shared `UpvoteButton` composable (in
+     `ReportListComponents.kt`) is passed as `ReportListItem`'s existing `trailingContent` slot,
+     so no changes were needed to `ReportListItem`'s own props/signature.
+  `UpvoteButton` shows the current `upvoteCount` next to a thumbs-up icon that is filled/primary-
+  tinted when the current viewer has already upvoted, outline/neutral otherwise, and is only
+  `clickable` when the viewer is signed in and is not the report's owner - upvoting your own
+  report is a no-op affordance (rendered but inert), consistent with "upvoting your own report
+  doesn't make sense" from the requirements. The current uid is threaded via the existing
+  `FirebaseAuth` injection pattern already used in `ReportsListViewModel` (for `ReportsScope.MINE`
+  filtering) and `ReportDetailViewModel` (via `AuthRepository.currentUser`), not a new prop-
+  threading mechanism.
+- `ReportsListViewModel.toggleUpvote(reportId)` added alongside the existing `setScope`/
+  `onFilterChange`/`refresh` methods, following the same `viewModelScope.launch { repository... }`
+  pattern used throughout.
+
+**UI/UX (30%)**
+- The "Update from the city" card reuses the same `Card`/`CardDefaults.cardElevation` styling
+  conventions as the existing metadata card in `ReportDetailScreen.kt`, but uses
+  `primaryContainer`/`onPrimaryContainer` colors specifically to visually distinguish it as good
+  news / an actionable update, rather than blending into the neutral `surfaceVariant` metadata
+  card right above it.
+- Department/priority display and the upvote control deliberately reuse the exact chip/label
+  composables (`DepartmentLabel`, `PriorityIndicator`) introduced for the admin view in the prior
+  phase, rather than inventing a second visual language for the same data - the citizen sees the
+  same shape/color vocabulary the admin used to triage their report.
+- The upvote icon swaps between Material's outlined and filled `ThumbUp` variant (plus a tint
+  change) to indicate "already upvoted by me" at a glance, matching the filled/outline state
+  pattern already established by `StatusBadge`/`CategoryChip`'s selected-state styling elsewhere
+  in the app.
+
+**Security (20%)**
+- No `firestore.rules` change was needed this phase - the Data Model phase had already added the
+  `upvoteCount`/`upvotedByUids`-only update branch (any signed-in user, not just the owner or an
+  admin, `hasOnly(['upvoteCount', 'upvotedByUids'])`), which is exactly the access pattern
+  `toggleUpvote` needs. This phase's `toggleUpvote` implementation was written to match that
+  existing rule shape precisely: it only ever writes those two fields together, never any other
+  report field, so a malicious client attempting to piggyback other field changes onto an upvote
+  write would still be rejected server-side regardless of what the client code does.
+- Notification content enrichment (`NotificationHelper.notifyStatusChanged`) reads `resolutionNote`
+  from the same Firestore document snapshot already fetched by the existing
+  `startStatusChangeListener` (scoped by the rules' owner-or-admin read rule), so no new data
+  exposure was introduced - the citizen was always allowed to read their own report's
+  `resolutionNote`, this phase just also puts a snippet of it in the notification text instead of
+  requiring them to open the app to see why their status changed.
+
+**Notifications**
+- `NotificationHelper.notifyStatusChanged` gained an optional `resolutionNote` parameter
+  (defaulted to `""` to stay source-compatible with any other call site). When non-blank, the
+  notification body becomes `"Your <category> report is now <status>: <first 60 chars of
+  resolutionNote>..."` instead of the bare `"Your <category> report is now <status>"`; a
+  `BigTextStyle` was added so the longer combined text isn't truncated in the notification shade.
+  `ReportRepositoryImpl.startStatusChangeListener` now passes `report.resolutionNote` through on
+  every detected status change - channel ID, notification ID (`reportId.hashCode()`), and the
+  overall status-change-detection loop are otherwise unchanged.
+
+---
+
+## 2026-08-05 — Custom/free-text category for issues outside the fixed list
+
+- **Motivation**: the user pointed out that the fixed five-category enum (Pothole/Streetlight/
+  Garbage/Water leak/Other) doesn't cover every real civic issue - fallen trees, burst pipes,
+  downed power lines, and countless other one-off situations would all get dumped into "Other"
+  with no further context, which is a poor experience for both the citizen (their specific issue
+  isn't represented) and the admin triaging reports later (an undifferentiated pile of "Other").
+- **Design decision**: added `ReportCategory.CUSTOM` as a real, user-selectable category (not a
+  hidden system placeholder like `UNCATEGORIZED`), paired with a new `Report.customLabel: String`
+  field (max 80 chars) holding the free-text description - e.g. "Fallen tree blocking road" or
+  "Burst water pipe". `ReportCategory.selectableEntries` (already existed, used to exclude
+  `UNCATEGORIZED` from pickers) now includes `CUSTOM` as a normal option alongside the fixed five.
+- **Where it surfaces**:
+  - `CaptureScreen`'s category picker (`FormStep`): selecting the "CUSTOM" chip reveals a
+    single-line text field ("Describe the issue", placeholder "e.g. Fallen tree blocking road").
+    `submit()` now validates that a custom label is present before allowing submission when
+    `CUSTOM` is selected, mirroring the existing "no photo" validation pattern in the same function.
+  - `ReportDetailScreen`'s `EditReportSection` (citizen edit-while-SUBMITTED flow, and the
+    resubmit-after-AI-review flow): identical text-field behavior, `canSave` now also requires a
+    non-blank custom label when `CUSTOM` is selected.
+  - Everywhere a category is displayed (list items, detail header) now calls a new
+    `Report.categoryDisplayText()` extension (in `ui/reports/ReportListComponents.kt`) that shows
+    the actual custom label text instead of the generic word "Custom" whenever one is present -
+    added once, used from `ReportListItem` and `ReportDetailScreen`'s header row, rather than
+    duplicating the same null-check/fallback logic in multiple files.
+- **AI classifier can also propose CUSTOM**: `VisionClassifierService`'s prompt to the Gemma
+  vision model was changed from "pick one of these five words, otherwise say OTHER" to
+  explicitly allow replying `CUSTOM: <short 2-5 word description>` when the photo clearly shows
+  something specific that isn't covered by the fixed list. `parseCategory()` now checks for a
+  `CUSTOM:` prefix via regex before falling back to the original keyword-matching logic, and
+  preserves the original-case label text (the prior implementation uppercased the whole response
+  for matching, which would have mangled a human-readable custom label).
+  - `CategorySuggestion` (in `MlKitCategoryClassifier.kt`, shared by both classifiers) gained a
+    `customLabel: String = ""` field. ML Kit's own on-device classifier never populates it - it
+    has no generative capability, only keyword-matches against fixed categories - so this only
+    ever comes from the LLM path. Documented as an accepted limitation in `PLACEHOLDERS_TODO.csv`:
+    if the LAN AI server is unreachable, an ML Kit fallback for a genuinely novel issue will land
+    on OTHER rather than a custom-labeled suggestion, until the planned real-hosted-API upgrade.
+  - `AiReviewCoordinator`'s two existing branches (auto-categorizing an `UNCATEGORIZED` report, or
+    flagging a disagreement for review) both now pass the AI's `customLabel` through to the
+    repository. Added `Report.aiSuggestedCustomLabel` (sibling to the existing
+    `aiSuggestedCategory`) so the "AI review needed" banner on `ReportDetailScreen` can show the
+    AI's actual proposed description ("Our AI suggests this might be \"Fallen tree\" instead
+    of...") rather than just the word "Custom".
+- **Data/rules plumbing**: `customLabel` and `aiSuggestedCustomLabel` were added to
+  `FirestoreConstants.ReportFields`, `ReportRepositoryImpl`'s read/write mapping, and
+  `firestore.rules`' owner-update `hasOnly([...])` allowlist (both fields added alongside the
+  existing `category`/`aiSuggestedCategory` entries, preserving the exact same
+  status-must-stay-SUBMITTED / owner-only constraints already in place - no widening of what an
+  owner can otherwise touch). `PendingReportEntity` (the Room offline-queue entity) also gained a
+  `customLabel` column with a default value, safe under the project's existing
+  `fallbackToDestructiveMigration()` Room setup; `submitReport`'s offline-queue branch and
+  `syncPendingReports()` both carry it through so an offline-queued custom report doesn't lose its
+  label once it eventually syncs.
 - Verified with `compileDebugKotlin` (BUILD SUCCESSFUL).

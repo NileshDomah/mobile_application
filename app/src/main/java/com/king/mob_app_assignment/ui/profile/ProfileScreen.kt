@@ -14,6 +14,7 @@ import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -22,9 +23,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -32,6 +37,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.king.mob_app_assignment.domain.model.UserRole
 import com.king.mob_app_assignment.ui.components.AppTopBar
 import com.king.mob_app_assignment.ui.components.NavigationRow
+import com.king.mob_app_assignment.ui.components.StatsRow
 import com.king.mob_app_assignment.ui.theme.PillShape
 
 private fun UserRole.label(): String = when (this) {
@@ -47,7 +53,9 @@ fun ProfileScreen(
     viewModel: ProfileViewModel = hiltViewModel(),
 ) {
     val user by viewModel.currentUser.collectAsState()
+    val impactStats by viewModel.impactStats.collectAsState()
     val role = user?.role ?: UserRole.CITIZEN
+    var showLogoutConfirm by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = { AppTopBar(title = "Profile") },
@@ -90,6 +98,8 @@ fun ProfileScreen(
                 }
             }
 
+            StatsRow(stats = impactStats, modifier = Modifier.padding(top = 16.dp))
+
             Card(
                 modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
                 shape = MaterialTheme.shapes.medium,
@@ -109,10 +119,7 @@ fun ProfileScreen(
             }
 
             OutlinedButton(
-                onClick = {
-                    viewModel.logout()
-                    onLoggedOut()
-                },
+                onClick = { showLogoutConfirm = true },
                 modifier = Modifier.fillMaxWidth().padding(top = 24.dp),
                 shape = MaterialTheme.shapes.small,
                 colors = ButtonDefaults.outlinedButtonColors(
@@ -127,6 +134,24 @@ fun ProfileScreen(
                 )
                 Text(text = "Logout", modifier = Modifier.padding(start = 8.dp))
             }
+        }
+
+        if (showLogoutConfirm) {
+            AlertDialog(
+                onDismissRequest = { showLogoutConfirm = false },
+                title = { Text("Log out?") },
+                text = { Text("You'll need to sign in again to file or view your reports.") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showLogoutConfirm = false
+                        viewModel.logout()
+                        onLoggedOut()
+                    }) { Text("Log out") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showLogoutConfirm = false }) { Text("Cancel") }
+                },
+            )
         }
     }
 }

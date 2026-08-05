@@ -35,6 +35,7 @@ import com.king.mob_app_assignment.util.PermissionManager
 @Composable
 fun PermissionDashboardScreen(
     viewModel: PermissionDashboardViewModel,
+    onBackClick: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val uiState by viewModel.uiState.collectAsState()
@@ -48,7 +49,7 @@ fun PermissionDashboardScreen(
     LaunchedEffect(Unit) { viewModel.refresh() }
 
     Scaffold(
-        topBar = { AppTopBar(title = "Permission Dashboard") },
+        topBar = { AppTopBar(title = "Permission Dashboard", onBackClick = onBackClick) },
     ) { padding ->
         LazyColumn(
             modifier = Modifier

@@ -1,0 +1,62 @@
+<resources>
+    <!-- Bottom navigation -->
+    <string name="nav_home">Inicio</string>
+    <string name="nav_reports">Informes</string>
+    <string name="nav_my_reports">Mis informes</string>
+    <string name="nav_profile">Perfil</string>
+    <string name="nav_admin">Administración</string>
+
+    <!-- Auth: shared brand header -->
+    <string name="auth_app_title">Shake to Report</string>
+    <string name="auth_logo_content_description">Logotipo de Shake to Report</string>
+
+    <!-- Auth: Login screen -->
+    <string name="login_welcome_back">Bienvenido de nuevo</string>
+    <string name="login_subtitle">Inicia sesión para seguir reportando problemas cívicos</string>
+    <string name="login_email_label">Correo electrónico</string>
+    <string name="login_password_label">Contraseña</string>
+    <string name="login_remember_me">Recordarme</string>
+    <string name="login_button">Iniciar sesión</string>
+    <string name="login_register_prompt">¿No tienes una cuenta? Regístrate</string>
+
+    <!-- Auth: Register screen -->
+    <string name="register_create_account">Crear cuenta</string>
+    <string name="register_subtitle">Únete a tu comunidad para reportar problemas cívicos</string>
+    <string name="register_display_name_label">Nombre para mostrar</string>
+    <string name="register_email_label">Correo electrónico</string>
+    <string name="register_password_label">Contraseña</string>
+    <string name="register_confirm_password_label">Confirmar contraseña</string>
+    <string name="register_button">Registrarse</string>
+    <string name="register_login_prompt">¿Ya tienes una cuenta? Inicia sesión</string>
+
+    <!-- Home screen -->
+    <string name="home_top_bar_title">Shake to Report</string>
+    <string name="home_report_issue_button">Reportar un problema</string>
+    <string name="home_shake_tip">Consejo: agita tu teléfono para reportar al instante, donde sea que estés.</string>
+    <string name="home_recent_activity">Actividad reciente</string>
+    <string name="home_no_reports_title">Aún no hay informes</string>
+    <string name="home_no_reports_message">Todavía no has presentado ningún informe.</string>
+
+    <!-- Settings screen -->
+    <string name="settings_title">Configuración</string>
+    <string name="settings_shake_sensitivity_title">Sensibilidad de agitación</string>
+    <string name="settings_shake_sensitivity_description">Menor = más sensible (más fácil de activar un informe al agitar). Mayor = requiere una agitación más fuerte.</string>
+    <string name="settings_current_threshold">Umbral actual: %1$d</string>
+    <string name="settings_permission_dashboard">Panel de permisos</string>
+    <string name="settings_language_title">Idioma</string>
+    <string name="settings_language_description">Elige el idioma en el que se muestra la aplicación.</string>
+    <string name="settings_language_english">English</string>
+    <string name="settings_language_spanish">Español</string>
+    <string name="settings_language_french">Français</string>
+
+    <!-- Onboarding walkthrough -->
+    <string name="onboarding_skip">Omitir</string>
+    <string name="onboarding_next">Siguiente</string>
+    <string name="onboarding_get_started">Comenzar</string>
+    <string name="onboarding_page1_title">Reporta problemas cívicos en segundos</string>
+    <string name="onboarding_page1_body">¿Ves un bache, una luz rota o un contenedor desbordado? Captúralo y envíalo a las personas indicadas al instante.</string>
+    <string name="onboarding_page2_title">Solo agita tu teléfono</string>
+    <string name="onboarding_page2_body">Estés donde estés, una simple agitación abre la cámara de reporte al instante, sin necesidad de buscar la aplicación.</string>
+    <string name="onboarding_page3_title">Sigue cada informe</string>
+    <string name="onboarding_page3_body">Sigue las actualizaciones de estado desde el envío hasta la resolución en Mis informes, para que siempre sepas qué pasó.</string>
+</resources>

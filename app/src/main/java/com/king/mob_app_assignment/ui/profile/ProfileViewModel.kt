@@ -4,11 +4,16 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.king.mob_app_assignment.data.repository.AuthRepository
 import com.king.mob_app_assignment.data.repository.ReportRepository
+import com.king.mob_app_assignment.domain.model.ImpactStats
 import com.king.mob_app_assignment.domain.model.User
+import com.king.mob_app_assignment.domain.model.toImpactStats
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import javax.inject.Inject
 
@@ -21,6 +26,16 @@ class ProfileViewModel @Inject constructor(
     val currentUser: StateFlow<User?> = authRepository.currentUser
         .catch { emit(null) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    val impactStats: StateFlow<ImpactStats> = authRepository.currentUser
+        .flatMapLatest { user ->
+            user?.uid?.takeIf { it.isNotBlank() }
+                ?.let { uid -> reportRepository.getReportsForUser(uid) }
+                ?: flowOf(emptyList())
+        }
+        .map { reports -> reports.toImpactStats() }
+        .catch { emit(ImpactStats()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ImpactStats())
 
     fun logout() {
         reportRepository.stopStatusChangeListener()

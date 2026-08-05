@@ -24,9 +24,42 @@ service cloud.firestore {
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
       allow read: if isSignedIn() &&
         (resource.data.userId == request.auth.uid || isAdmin());
+      // Admins keep full update rights (they update status via a separate path).
+      // A non-admin owner may only edit their own report while it is still SUBMITTED, may not
+      // change status themselves, and may only touch category/note/needsAiReview/
+      // aiSuggestedCategory/wasResubmittedAfterAiReview - not photo/location/timestamp, which
+      // are the evidentiary capture of the report and stay immutable. The AI-review-flag write
+      // (needsAiReview + aiSuggestedCategory, from AiReviewCoordinator) and the user's manual
+      // edit/resubmit-after-AI-review write (category + note, or all four AI-review fields at
+      // once) both run through this same owner-update path, since there is no separate
+      // server-side identity for the app's own background classification.
+      // Any signed-in user (not just the owner or an admin) may toggle their upvote on someone
+      // else's report - this is a deliberately separate access pattern from the owner-only edit
+      // path above, scoped to touch only upvoteCount/upvotedByUids. We only check that these are
+      // the sole affected keys, not that upvoteCount mathematically matches the new array length
+      // (that would require re-deriving the diff length in rules syntax); a Cloud Function would
+      // be the right place to enforce that rigorously in production - see PLACEHOLDERS_TODO.csv.
       allow update: if isSignedIn() &&
-        (resource.data.userId == request.auth.uid || isAdmin());
-      allow delete: if false;
+        (
+          isAdmin() ||
+          (
+            resource.data.userId == request.auth.uid &&
+            resource.data.status == 'SUBMITTED' &&
+            request.resource.data.status == resource.data.status &&
+            request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['category', 'customLabel', 'note', 'needsAiReview', 'aiSuggestedCategory', 'aiSuggestedCustomLabel', 'wasResubmittedAfterAiReview'])
+          ) ||
+          (
+            request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['upvoteCount', 'upvotedByUids'])
+          )
+        );
+      // Citizens may delete only their own still-unreviewed (SUBMITTED) report as a self-service
+      // "I made a mistake" action. Admins do not get delete - once in the system, they resolve
+      // or track it, not remove it.
+      allow delete: if isSignedIn() &&
+        resource.data.userId == request.auth.uid &&
+        resource.data.status == 'SUBMITTED';
     }
   }
 }

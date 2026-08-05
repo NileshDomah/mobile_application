@@ -1,0 +1,62 @@
+<resources>
+    <!-- Bottom navigation -->
+    <string name="nav_home">Accueil</string>
+    <string name="nav_reports">Signalements</string>
+    <string name="nav_my_reports">Mes signalements</string>
+    <string name="nav_profile">Profil</string>
+    <string name="nav_admin">Admin</string>
+
+    <!-- Auth: shared brand header -->
+    <string name="auth_app_title">Shake to Report</string>
+    <string name="auth_logo_content_description">Logo de Shake to Report</string>
+
+    <!-- Auth: Login screen -->
+    <string name="login_welcome_back">Content de vous revoir</string>
+    <string name="login_subtitle">Connectez-vous pour continuer à signaler des problèmes civiques</string>
+    <string name="login_email_label">E-mail</string>
+    <string name="login_password_label">Mot de passe</string>
+    <string name="login_remember_me">Se souvenir de moi</string>
+    <string name="login_button">Se connecter</string>
+    <string name="login_register_prompt">Pas de compte ? Inscrivez-vous</string>
+
+    <!-- Auth: Register screen -->
+    <string name="register_create_account">Créer un compte</string>
+    <string name="register_subtitle">Rejoignez votre communauté pour signaler des problèmes civiques</string>
+    <string name="register_display_name_label">Nom d\'affichage</string>
+    <string name="register_email_label">E-mail</string>
+    <string name="register_password_label">Mot de passe</string>
+    <string name="register_confirm_password_label">Confirmer le mot de passe</string>
+    <string name="register_button">S\'inscrire</string>
+    <string name="register_login_prompt">Déjà un compte ? Connectez-vous</string>
+
+    <!-- Home screen -->
+    <string name="home_top_bar_title">Shake to Report</string>
+    <string name="home_report_issue_button">Signaler un problème</string>
+    <string name="home_shake_tip">Astuce : secouez votre téléphone pour signaler instantanément, où que vous soyez.</string>
+    <string name="home_recent_activity">Activité récente</string>
+    <string name="home_no_reports_title">Aucun signalement</string>
+    <string name="home_no_reports_message">Vous n\'avez encore déposé aucun signalement.</string>
+
+    <!-- Settings screen -->
+    <string name="settings_title">Paramètres</string>
+    <string name="settings_shake_sensitivity_title">Sensibilité de secousse</string>
+    <string name="settings_shake_sensitivity_description">Plus bas = plus sensible (déclenche un signalement plus facilement). Plus haut = nécessite une secousse plus forte.</string>
+    <string name="settings_current_threshold">Seuil actuel : %1$d</string>
+    <string name="settings_permission_dashboard">Tableau des autorisations</string>
+    <string name="settings_language_title">Langue</string>
+    <string name="settings_language_description">Choisissez la langue d\'affichage de l\'application.</string>
+    <string name="settings_language_english">English</string>
+    <string name="settings_language_spanish">Español</string>
+    <string name="settings_language_french">Français</string>
+
+    <!-- Onboarding walkthrough -->
+    <string name="onboarding_skip">Passer</string>
+    <string name="onboarding_next">Suivant</string>
+    <string name="onboarding_get_started">Commencer</string>
+    <string name="onboarding_page1_title">Signalez des problèmes civiques en quelques secondes</string>
+    <string name="onboarding_page1_body">Vous voyez un nid-de-poule, un lampadaire cassé ou une poubelle débordante ? Photographiez-le et envoyez-le aux bonnes personnes immédiatement.</string>
+    <string name="onboarding_page2_title">Secouez simplement votre téléphone</string>
+    <string name="onboarding_page2_body">Où que vous soyez, une simple secousse ouvre instantanément l\'appareil photo de signalement - pas besoin de chercher l\'application.</string>
+    <string name="onboarding_page3_title">Suivez chaque signalement</string>
+    <string name="onboarding_page3_body">Suivez les mises à jour de statut, de l\'envoi jusqu\'à la résolution, dans Mes signalements, pour toujours savoir ce qui s\'est passé.</string>
+</resources>

@@ -15,6 +15,7 @@ object FirestoreConstants {
     object ReportFields {
         const val USER_ID = "userId"
         const val CATEGORY = "category"
+        const val CUSTOM_LABEL = "customLabel"
         const val PHOTO_URL = "photoUrl"
         const val LOCAL_PHOTO_PATH = "localPhotoPath"
         const val LATITUDE = "latitude"
@@ -25,6 +26,16 @@ object FirestoreConstants {
         const val TIMESTAMP = "timestamp"
         const val NOTE = "note"
         const val STATUS = "status"
+        const val AI_SUGGESTED_CATEGORY = "aiSuggestedCategory"
+        const val AI_SUGGESTED_CUSTOM_LABEL = "aiSuggestedCustomLabel"
+        const val NEEDS_AI_REVIEW = "needsAiReview"
+        const val WAS_RESUBMITTED_AFTER_AI_REVIEW = "wasResubmittedAfterAiReview"
+        const val DEPARTMENT = "department"
+        const val PRIORITY = "priority"
+        const val RESOLUTION_NOTE = "resolutionNote"
+        const val RESOLUTION_PHOTO_PATH = "resolutionPhotoPath"
+        const val UPVOTE_COUNT = "upvoteCount"
+        const val UPVOTED_BY_UIDS = "upvotedByUids"
     }
 
     object RoleValues {

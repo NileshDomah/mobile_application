@@ -14,4 +14,13 @@
         <item name="android:statusBarColor">#1A1C1E</item>
         <item name="android:windowBackground">#1A1C1E</item>
     </style>
+
+    <!-- Android 12+ SplashScreen API theme, dark variant. Keeps the same civic blue brand
+         background as light mode for a consistent brand splash regardless of system theme. -->
+    <style name="Theme.Mob_app_assignment.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/civic_blue_dark</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_app_logo</item>
+        <item name="windowSplashScreenIconBackgroundColor">@color/civic_blue_dark</item>
+        <item name="postSplashScreenTheme">@style/Theme.Mob_app_assignment</item>
+    </style>
 </resources>

@@ -18,16 +18,21 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -38,13 +43,25 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -56,7 +73,12 @@ import com.king.mob_app_assignment.ui.components.LoadingIndicator
 import com.king.mob_app_assignment.ui.components.PrimaryActionButton
 import com.king.mob_app_assignment.ui.permissions.PermissionExplainerScreen
 import com.king.mob_app_assignment.util.AppPermission
+import com.king.mob_app_assignment.util.NormalizedStroke
 import com.king.mob_app_assignment.util.PermissionManager
+import com.king.mob_app_assignment.util.PhotoAnnotator
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -82,6 +104,7 @@ fun CaptureScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
+    val hapticFeedback = LocalHapticFeedback.current
 
     var pendingFile by remember { mutableStateOf<File?>(null) }
     var pendingUri by remember { mutableStateOf<Uri?>(null) }
@@ -149,6 +172,7 @@ fun CaptureScreen(
 
     LaunchedEffect(uiState.stage) {
         if (uiState.stage == CaptureStage.SUBMITTED) {
+            hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
             onSubmitted()
         }
     }
@@ -174,7 +198,7 @@ fun CaptureScreen(
 
     Scaffold(
         topBar = {
-            AppTopBar(title = "Report an issue")
+            AppTopBar(title = "Report an issue", onBackClick = onDismiss)
         },
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
@@ -182,6 +206,7 @@ fun CaptureScreen(
                 CaptureStage.IDLE -> Unit
                 CaptureStage.PREVIEW -> PreviewStep(
                     photoUri = uiState.photoUri,
+                    photoFile = uiState.photoFile,
                     onRetake = {
                         viewModel.onRetake()
                         launchCamera()
@@ -221,21 +246,99 @@ fun CaptureScreen(
     }
 }
 
+private val ANNOTATION_COLOR = Color(0xFFFF2D14)
+
 @Composable
-private fun PreviewStep(photoUri: Uri?, onRetake: () -> Unit, onConfirm: () -> Unit) {
+private fun PreviewStep(
+    photoUri: Uri?,
+    photoFile: File?,
+    onRetake: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val strokes = remember { mutableStateListOf<List<Offset>>() }
+    var currentStroke by remember { mutableStateOf<List<Offset>>(emptyList()) }
+    var canvasSize by remember { mutableStateOf(Offset(0f, 0f)) }
+    var isBaking by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
+
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        AsyncImage(
-            model = photoUri,
-            contentDescription = "Captured photo",
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(3f / 4f)
                 .clip(MaterialTheme.shapes.medium),
-        )
+        ) {
+            AsyncImage(
+                model = photoUri,
+                contentDescription = "Captured photo",
+                modifier = Modifier.fillMaxSize(),
+            )
+            Canvas(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        canvasSize = Offset(size.width.toFloat(), size.height.toFloat())
+                        detectDragGestures(
+                            onDragStart = { offset -> currentStroke = listOf(offset) },
+                            onDrag = { change, _ ->
+                                currentStroke = currentStroke + change.position
+                            },
+                            onDragEnd = {
+                                if (currentStroke.size >= 2) strokes.add(currentStroke)
+                                currentStroke = emptyList()
+                            },
+                        )
+                    },
+            ) {
+                canvasSize = Offset(size.width, size.height)
+                val strokeWidthPx = size.width * 0.012f
+                (strokes + listOf(currentStroke)).forEach { points ->
+                    if (points.size < 2) return@forEach
+                    val path = Path()
+                    path.moveTo(points.first().x, points.first().y)
+                    points.drop(1).forEach { path.lineTo(it.x, it.y) }
+                    drawPath(
+                        path = path,
+                        color = ANNOTATION_COLOR,
+                        style = Stroke(
+                            width = strokeWidthPx,
+                            cap = StrokeCap.Round,
+                            join = StrokeJoin.Round,
+                        ),
+                    )
+                }
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Draw to mark the issue (optional)",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(
+                onClick = { if (strokes.isNotEmpty()) strokes.removeAt(strokes.lastIndex) },
+                enabled = strokes.isNotEmpty(),
+            ) {
+                Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "Undo last stroke")
+            }
+            IconButton(
+                onClick = { strokes.clear() },
+                enabled = strokes.isNotEmpty(),
+            ) {
+                Icon(Icons.Filled.Clear, contentDescription = "Clear annotation")
+            }
+        }
+
         Text(
             text = "Review your photo",
             style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(top = 16.dp),
+            modifier = Modifier.padding(top = 8.dp),
         )
         Text(
             text = "Retake if the issue isn't clearly visible, or confirm to continue.",
@@ -249,6 +352,7 @@ private fun PreviewStep(photoUri: Uri?, onRetake: () -> Unit, onConfirm: () -> U
         ) {
             OutlinedButton(
                 onClick = onRetake,
+                enabled = !isBaking,
                 modifier = Modifier.weight(1f).height(56.dp),
                 shape = MaterialTheme.shapes.small,
             ) {
@@ -256,7 +360,26 @@ private fun PreviewStep(photoUri: Uri?, onRetake: () -> Unit, onConfirm: () -> U
             }
             PrimaryActionButton(
                 text = "Confirm",
-                onClick = onConfirm,
+                isLoading = isBaking,
+                onClick = onClick@{
+                    if (strokes.isEmpty() || photoFile == null || canvasSize.x <= 0f || canvasSize.y <= 0f) {
+                        onConfirm()
+                        return@onClick
+                    }
+                    val normalized = strokes.map { points ->
+                        NormalizedStroke(
+                            points.map { it.x / canvasSize.x to it.y / canvasSize.y },
+                        )
+                    }
+                    isBaking = true
+                    coroutineScope.launch {
+                        withContext(Dispatchers.IO) {
+                            PhotoAnnotator.bakeStrokesIntoFile(photoFile, normalized)
+                        }
+                        isBaking = false
+                        onConfirm()
+                    }
+                },
                 modifier = Modifier.weight(1f),
             )
         }
@@ -372,22 +495,33 @@ private fun FormStep(uiState: CaptureUiState, viewModel: CaptureViewModel) {
             style = MaterialTheme.typography.titleMedium,
             modifier = Modifier.padding(top = 20.dp, bottom = 8.dp),
         )
-        if (uiState.suggestedCategory != null && uiState.suggestionConfidence < 0.5f) {
-            Text(
-                text = "Low-confidence suggestion (${(uiState.suggestionConfidence * 100).toInt()}%) - please pick manually",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(bottom = 8.dp),
-            )
-        }
+        Text(
+            text = "AI will double-check this after you submit - if it disagrees, you'll be asked to review it.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 8.dp),
+        )
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(ReportCategory.entries.toList()) { category ->
+            items(ReportCategory.selectableEntries) { category ->
                 CategoryChip(
                     label = category.name,
                     selected = uiState.selectedCategory == category,
                     onClick = { viewModel.onCategorySelected(category) },
                 )
             }
+        }
+
+        if (uiState.selectedCategory == ReportCategory.CUSTOM) {
+            OutlinedTextField(
+                value = uiState.customLabel,
+                onValueChange = viewModel::onCustomLabelChange,
+                label = { Text("Describe the issue") },
+                placeholder = { Text("e.g. Fallen tree blocking road") },
+                modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                shape = MaterialTheme.shapes.small,
+                singleLine = true,
+                supportingText = { Text("${uiState.customLabel.length}/80") },
+            )
         }
 
         OutlinedTextField(

@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.firebase.auth.FirebaseAuth
+import com.king.mob_app_assignment.ai.AiReviewCoordinator
 import com.king.mob_app_assignment.data.local.PendingReportDao
 import com.king.mob_app_assignment.data.local.PendingReportEntity
 import com.king.mob_app_assignment.data.location.LocationProvider
@@ -11,10 +12,11 @@ import com.king.mob_app_assignment.data.repository.ReportRepository
 import com.king.mob_app_assignment.domain.model.Report
 import com.king.mob_app_assignment.domain.model.ReportCategory
 import com.king.mob_app_assignment.sensor.CompassProvider
-import com.king.mob_app_assignment.sensor.MlKitCategoryClassifier
+import com.king.mob_app_assignment.util.CrashReporter
 import com.king.mob_app_assignment.util.ExifStripper
 import com.king.mob_app_assignment.util.NoteSanitizer
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -42,9 +44,8 @@ data class CaptureUiState(
     val stage: CaptureStage = CaptureStage.IDLE,
     val photoUri: Uri? = null,
     val photoFile: File? = null,
-    val suggestedCategory: ReportCategory? = null,
-    val suggestionConfidence: Float = 0f,
     val selectedCategory: ReportCategory? = null,
+    val customLabel: String = "",
     val note: String = "",
     val latitude: Double = 0.0,
     val longitude: Double = 0.0,
@@ -54,15 +55,15 @@ data class CaptureUiState(
     val timestamp: Long = 0L,
     val errorMessage: String? = null,
     val duplicateCandidate: Report? = null,
+    val wasQueuedOffline: Boolean = false,
 )
-
-private const val CONFIDENCE_AUTO_SELECT_THRESHOLD = 0.5f
 
 @HiltViewModel
 class CaptureViewModel @Inject constructor(
     private val locationProvider: LocationProvider,
     private val compassProvider: CompassProvider,
-    private val mlKitCategoryClassifier: MlKitCategoryClassifier,
+    private val aiReviewCoordinator: AiReviewCoordinator,
+    private val appScope: CoroutineScope,
     private val pendingReportDao: PendingReportDao,
     private val reportRepository: ReportRepository,
     private val firebaseAuth: FirebaseAuth,
@@ -83,7 +84,6 @@ class CaptureViewModel @Inject constructor(
 
     fun onConfirmCapture() {
         val current = _uiState.value
-        val photoUri = current.photoUri ?: return
         val photoFile = current.photoFile
 
         _uiState.update { it.copy(stage = CaptureStage.ANALYZING, errorMessage = null) }
@@ -93,6 +93,10 @@ class CaptureViewModel @Inject constructor(
 
             val captureTimestamp = System.currentTimeMillis()
 
+            // AI classification deliberately does NOT run here anymore - it used to block the
+            // user on this screen while Gemma/ML Kit processed the photo. It now runs in the
+            // background after submit (see AiReviewCoordinator), so the user only ever waits on
+            // location/heading, which are fast local device reads, not a network/model call.
             val locationDeferred = async {
                 runCatching {
                     val location = locationProvider.getCurrentLocation()
@@ -105,17 +109,9 @@ class CaptureViewModel @Inject constructor(
             val headingDeferred = async {
                 runCatching { compassProvider.headingDegreesFlow().first() }.getOrElse { 0f }
             }
-            val classificationDeferred = async {
-                runCatching { mlKitCategoryClassifier.classify(photoUri) }.getOrNull()
-            }
 
             val (lat, lng, address) = locationDeferred.await()
             val heading = headingDeferred.await()
-            val suggestion = classificationDeferred.await()
-
-            val autoSelected = suggestion?.takeIf {
-                it.confidence >= CONFIDENCE_AUTO_SELECT_THRESHOLD
-            }?.category
 
             _uiState.update {
                 it.copy(
@@ -126,9 +122,6 @@ class CaptureViewModel @Inject constructor(
                     headingDegrees = heading,
                     headingCardinal = CompassProvider.degreesToCardinal(heading),
                     timestamp = captureTimestamp,
-                    suggestedCategory = suggestion?.category,
-                    suggestionConfidence = suggestion?.confidence ?: 0f,
-                    selectedCategory = autoSelected,
                 )
             }
         }
@@ -138,16 +131,27 @@ class CaptureViewModel @Inject constructor(
         _uiState.update { it.copy(selectedCategory = category) }
     }
 
+    fun onCustomLabelChange(value: String) {
+        _uiState.update { it.copy(customLabel = value.take(80)) }
+    }
+
     fun onNoteChange(value: String) {
         _uiState.update { it.copy(note = NoteSanitizer.sanitizeNote(value)) }
     }
 
     fun submit() {
         val state = _uiState.value
-        val category = state.selectedCategory
+        // Category selection is optional: if the user doesn't pick one, the report submits as
+        // UNCATEGORIZED and AiReviewCoordinator fills in the real category once it classifies
+        // the photo in the background (see doSubmit()).
+        val category = state.selectedCategory ?: ReportCategory.UNCATEGORIZED
         val photoFile = state.photoFile
-        if (category == null || photoFile == null) {
-            _uiState.update { it.copy(errorMessage = "Choose a category before submitting") }
+        if (photoFile == null) {
+            _uiState.update { it.copy(errorMessage = "Something went wrong with the photo - please retake it") }
+            return
+        }
+        if (category == ReportCategory.CUSTOM && state.customLabel.isBlank()) {
+            _uiState.update { it.copy(errorMessage = "Describe the issue before submitting") }
             return
         }
 
@@ -183,7 +187,7 @@ class CaptureViewModel @Inject constructor(
 
     private suspend fun doSubmit() {
         val state = _uiState.value
-        val category = state.selectedCategory ?: return
+        val category = state.selectedCategory ?: ReportCategory.UNCATEGORIZED
         val photoFile = state.photoFile ?: return
 
         _uiState.update { it.copy(stage = CaptureStage.SUBMITTING, errorMessage = null) }
@@ -192,6 +196,7 @@ class CaptureViewModel @Inject constructor(
         val report = Report(
             userId = userId,
             category = category,
+            customLabel = if (category == ReportCategory.CUSTOM) state.customLabel.trim() else "",
             localPhotoPath = photoFile.absolutePath,
             latitude = state.latitude,
             longitude = state.longitude,
@@ -202,13 +207,29 @@ class CaptureViewModel @Inject constructor(
             note = state.note,
         )
 
+        CrashReporter.log("CaptureViewModel: submitting report category=${category.name}")
         val result = reportRepository.submitReport(report, photoFile)
         if (result.isSuccess) {
+            CrashReporter.log("CaptureViewModel: report submitted successfully")
             _uiState.update { it.copy(stage = CaptureStage.SUBMITTED) }
+            val submittedId = result.getOrNull()?.id
+            if (!submittedId.isNullOrBlank()) {
+                aiReviewCoordinator.reviewInBackground(
+                    appScope = appScope,
+                    reportId = submittedId,
+                    photoUri = Uri.fromFile(photoFile),
+                    userSelectedCategory = category,
+                )
+            }
         } else {
+            result.exceptionOrNull()?.let {
+                CrashReporter.log("CaptureViewModel: report submission failed, queuing locally")
+                CrashReporter.recordException(it)
+            }
             val entity = PendingReportEntity(
                 userId = userId,
                 category = category.name,
+                customLabel = report.customLabel,
                 localPhotoPath = photoFile.absolutePath,
                 latitude = state.latitude,
                 longitude = state.longitude,
@@ -220,7 +241,7 @@ class CaptureViewModel @Inject constructor(
                 status = "SUBMITTED",
             )
             pendingReportDao.insert(entity)
-            _uiState.update { it.copy(stage = CaptureStage.SUBMITTED) }
+            _uiState.update { it.copy(stage = CaptureStage.SUBMITTED, wasQueuedOffline = true) }
         }
     }
 

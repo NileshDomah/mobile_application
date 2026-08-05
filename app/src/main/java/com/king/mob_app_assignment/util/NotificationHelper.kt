@@ -38,7 +38,7 @@ class NotificationHelper @Inject constructor(
         }
     }
 
-    fun notifyStatusChanged(reportId: String, category: String, newStatus: String) {
+    fun notifyStatusChanged(reportId: String, category: String, newStatus: String, resolutionNote: String = "") {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val granted = ContextCompat.checkSelfPermission(
                 context,
@@ -47,10 +47,19 @@ class NotificationHelper @Inject constructor(
             if (!granted) return
         }
 
+        val baseText = "Your $category report is now $newStatus"
+        val contentText = if (resolutionNote.isNotBlank()) {
+            val snippet = resolutionNote.take(60).let { if (resolutionNote.length > 60) "$it..." else it }
+            "$baseText: $snippet"
+        } else {
+            baseText
+        }
+
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentTitle("Report update")
-            .setContentText("Your $category report is now $newStatus")
+            .setContentText(contentText)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(contentText))
             .setAutoCancel(true)
             .build()
 

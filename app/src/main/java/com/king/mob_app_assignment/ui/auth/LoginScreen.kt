@@ -30,11 +30,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.king.mob_app_assignment.R
 import com.king.mob_app_assignment.ui.components.PrimaryActionButton
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -61,14 +63,14 @@ fun LoginScreen(
             verticalArrangement = Arrangement.Center,
         ) {
             AuthBrandHeader(
-                title = "Welcome back",
-                subtitle = "Log in to continue reporting civic issues",
+                title = stringResource(R.string.login_welcome_back),
+                subtitle = stringResource(R.string.login_subtitle),
             )
 
             OutlinedTextField(
                 value = uiState.email,
                 onValueChange = viewModel::onEmailChange,
-                label = { Text("Email") },
+                label = { Text(stringResource(R.string.login_email_label)) },
                 singleLine = true,
                 isError = uiState.emailError != null,
                 supportingText = { uiState.emailError?.let { Text(it) } },
@@ -80,7 +82,7 @@ fun LoginScreen(
             OutlinedTextField(
                 value = uiState.password,
                 onValueChange = viewModel::onPasswordChange,
-                label = { Text("Password") },
+                label = { Text(stringResource(R.string.login_password_label)) },
                 singleLine = true,
                 isError = uiState.passwordError != null,
                 supportingText = { uiState.passwordError?.let { Text(it) } },
@@ -111,7 +113,7 @@ fun LoginScreen(
                     onCheckedChange = viewModel::onRememberMeChange,
                 )
                 Text(
-                    text = "Remember me",
+                    text = stringResource(R.string.login_remember_me),
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
@@ -126,7 +128,7 @@ fun LoginScreen(
             }
 
             PrimaryActionButton(
-                text = "Log In",
+                text = stringResource(R.string.login_button),
                 onClick = viewModel::login,
                 isLoading = uiState.isLoading,
                 modifier = Modifier.padding(top = 20.dp),
@@ -138,7 +140,7 @@ fun LoginScreen(
                     .fillMaxWidth()
                     .padding(top = 4.dp),
             ) {
-                Text("Don't have an account? Register")
+                Text(stringResource(R.string.login_register_prompt))
             }
         }
     }

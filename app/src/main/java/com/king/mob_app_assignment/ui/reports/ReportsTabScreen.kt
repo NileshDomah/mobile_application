@@ -42,7 +42,7 @@ fun ReportsTabScreen(onReportClick: (Report) -> Unit) {
         if (selectedTab == 0) {
             ReportsListScreen(title = "Reports", scope = ReportsScope.ALL, onReportClick = onReportClick)
         } else {
-            MapPlaceholderScreen(onReportClick = onReportClick)
+            ReportsMapScreen(onReportClick = onReportClick)
         }
     }
 }

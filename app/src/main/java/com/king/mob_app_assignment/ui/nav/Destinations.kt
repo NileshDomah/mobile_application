@@ -1,6 +1,8 @@
 package com.king.mob_app_assignment.ui.nav
 
 object Destinations {
+    const val ONBOARDING = "onboarding"
+
     const val LOGIN = "login"
     const val REGISTER = "register"
 
@@ -19,4 +21,5 @@ object Destinations {
 
     const val AUTH_GRAPH = "auth_graph"
     const val MAIN_GRAPH = "main_graph"
+    const val ONBOARDING_GRAPH = "onboarding_graph"
 }

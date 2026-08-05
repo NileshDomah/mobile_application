@@ -7,10 +7,13 @@ import com.google.firebase.firestore.Query
 import com.king.mob_app_assignment.data.local.PendingReportDao
 import com.king.mob_app_assignment.data.local.PendingReportEntity
 import com.king.mob_app_assignment.data.remote.FirestoreConstants
+import com.king.mob_app_assignment.domain.model.Department
 import com.king.mob_app_assignment.domain.model.Report
 import com.king.mob_app_assignment.domain.model.ReportCategory
+import com.king.mob_app_assignment.domain.model.ReportPriority
 import com.king.mob_app_assignment.domain.model.ReportStatus
 import com.king.mob_app_assignment.util.ConnectivityObserver
+import com.king.mob_app_assignment.util.CrashReporter
 import com.king.mob_app_assignment.util.NotificationHelper
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -69,6 +72,95 @@ class ReportRepositoryImpl @Inject constructor(
         Unit
     }
 
+    override suspend fun assignDepartment(id: String, department: Department?): Result<Unit> = runCatching {
+        reportsCollection.document(id)
+            .update(FirestoreConstants.ReportFields.DEPARTMENT, department?.name)
+            .await()
+        Unit
+    }
+
+    override suspend fun setPriority(id: String, priority: ReportPriority): Result<Unit> = runCatching {
+        reportsCollection.document(id)
+            .update(FirestoreConstants.ReportFields.PRIORITY, priority.name)
+            .await()
+        Unit
+    }
+
+    override suspend fun resolveWithNote(
+        id: String,
+        status: ReportStatus,
+        note: String,
+        resolutionPhotoFile: File?,
+    ): Result<Unit> = runCatching {
+        val updates = mutableMapOf<String, Any?>(
+            FirestoreConstants.ReportFields.STATUS to status.name,
+            FirestoreConstants.ReportFields.RESOLUTION_NOTE to note,
+        )
+        if (resolutionPhotoFile != null) {
+            updates[FirestoreConstants.ReportFields.RESOLUTION_PHOTO_PATH] = resolutionPhotoFile.absolutePath
+        }
+        reportsCollection.document(id).update(updates).await()
+        Unit
+    }
+
+    override suspend fun updateReport(id: String, category: ReportCategory, note: String, customLabel: String): Result<Unit> = runCatching {
+        reportsCollection.document(id)
+            .update(
+                mapOf(
+                    FirestoreConstants.ReportFields.CATEGORY to category.name,
+                    FirestoreConstants.ReportFields.CUSTOM_LABEL to customLabel,
+                    FirestoreConstants.ReportFields.NOTE to note,
+                ),
+            )
+            .await()
+        Unit
+    }
+
+    override suspend fun deleteReport(id: String): Result<Unit> = runCatching {
+        reportsCollection.document(id).delete().await()
+        Unit
+    }
+
+    override suspend fun flagForAiReview(id: String, aiCategory: ReportCategory?, aiCustomLabel: String): Result<Unit> = runCatching {
+        reportsCollection.document(id)
+            .update(
+                mapOf(
+                    FirestoreConstants.ReportFields.NEEDS_AI_REVIEW to true,
+                    FirestoreConstants.ReportFields.AI_SUGGESTED_CATEGORY to aiCategory?.name,
+                    FirestoreConstants.ReportFields.AI_SUGGESTED_CUSTOM_LABEL to aiCustomLabel,
+                ),
+            )
+            .await()
+        Unit
+    }
+
+    override suspend fun applyAiCategory(id: String, category: ReportCategory, customLabel: String): Result<Unit> = runCatching {
+        reportsCollection.document(id)
+            .update(
+                mapOf(
+                    FirestoreConstants.ReportFields.CATEGORY to category.name,
+                    FirestoreConstants.ReportFields.CUSTOM_LABEL to customLabel,
+                ),
+            )
+            .await()
+        Unit
+    }
+
+    override suspend fun resubmitAfterAiReview(id: String, category: ReportCategory, note: String, customLabel: String): Result<Unit> = runCatching {
+        reportsCollection.document(id)
+            .update(
+                mapOf(
+                    FirestoreConstants.ReportFields.CATEGORY to category.name,
+                    FirestoreConstants.ReportFields.CUSTOM_LABEL to customLabel,
+                    FirestoreConstants.ReportFields.NOTE to note,
+                    FirestoreConstants.ReportFields.NEEDS_AI_REVIEW to false,
+                    FirestoreConstants.ReportFields.WAS_RESUBMITTED_AFTER_AI_REVIEW to true,
+                ),
+            )
+            .await()
+        Unit
+    }
+
     override suspend fun findNearbyRecentReports(
         category: ReportCategory,
         lat: Double,
@@ -93,6 +185,7 @@ class ReportRepositoryImpl @Inject constructor(
                     PendingReportEntity(
                         userId = report.userId,
                         category = report.category.name,
+                        customLabel = report.customLabel,
                         localPhotoPath = photoFile?.absolutePath ?: report.localPhotoPath.orEmpty(),
                         latitude = report.latitude,
                         longitude = report.longitude,
@@ -118,6 +211,7 @@ class ReportRepositoryImpl @Inject constructor(
             val report = Report(
                 userId = entity.userId,
                 category = ReportCategory.fromFirestoreValue(entity.category),
+                customLabel = entity.customLabel,
                 localPhotoPath = entity.localPhotoPath,
                 latitude = entity.latitude,
                 longitude = entity.longitude,
@@ -137,6 +231,25 @@ class ReportRepositoryImpl @Inject constructor(
         }
     }
 
+    override suspend fun toggleUpvote(id: String, uid: String): Result<Unit> = runCatching {
+        val docRef = reportsCollection.document(id)
+        val snapshot = docRef.get().await()
+        val report = snapshot.toReportOrNull() ?: error("Report $id not found")
+        val alreadyUpvoted = uid in report.upvotedByUids
+        val updatedUids = if (alreadyUpvoted) {
+            report.upvotedByUids - uid
+        } else {
+            report.upvotedByUids + uid
+        }
+        docRef.update(
+            mapOf(
+                FirestoreConstants.ReportFields.UPVOTED_BY_UIDS to updatedUids,
+                FirestoreConstants.ReportFields.UPVOTE_COUNT to updatedUids.size,
+            ),
+        ).await()
+        Unit
+    }
+
     override fun startStatusChangeListener(uid: String) {
         stopStatusChangeListener()
         lastKnownStatusByReportId.clear()
@@ -153,6 +266,7 @@ class ReportRepositoryImpl @Inject constructor(
                             reportId = report.id,
                             category = report.category.name,
                             newStatus = currentStatus,
+                            resolutionNote = report.resolutionNote,
                         )
                     }
                     lastKnownStatusByReportId[report.id] = currentStatus
@@ -174,7 +288,13 @@ class ReportRepositoryImpl @Inject constructor(
             id = docRef.id,
             localPhotoPath = photoFile?.absolutePath ?: report.localPhotoPath,
         )
-        docRef.set(toSave.toFirestoreMap()).await()
+        try {
+            docRef.set(toSave.toFirestoreMap()).await()
+        } catch (e: Exception) {
+            CrashReporter.log("ReportRepositoryImpl.createReport: Firestore write failed for category=${report.category.name}")
+            CrashReporter.recordException(e)
+            throw e
+        }
         toSave
     }
 
@@ -202,14 +322,28 @@ class ReportRepositoryImpl @Inject constructor(
             headingDegrees = (getDouble(FirestoreConstants.ReportFields.HEADING_DEGREES) ?: 0.0).toFloat(),
             headingCardinal = getString(FirestoreConstants.ReportFields.HEADING_CARDINAL).orEmpty(),
             timestamp = getLong(FirestoreConstants.ReportFields.TIMESTAMP) ?: 0L,
+            customLabel = getString(FirestoreConstants.ReportFields.CUSTOM_LABEL).orEmpty(),
             note = getString(FirestoreConstants.ReportFields.NOTE).orEmpty(),
             status = ReportStatus.fromFirestoreValue(getString(FirestoreConstants.ReportFields.STATUS)),
+            aiSuggestedCategory = getString(FirestoreConstants.ReportFields.AI_SUGGESTED_CATEGORY)
+                ?.let { ReportCategory.fromFirestoreValue(it) },
+            aiSuggestedCustomLabel = getString(FirestoreConstants.ReportFields.AI_SUGGESTED_CUSTOM_LABEL).orEmpty(),
+            needsAiReview = getBoolean(FirestoreConstants.ReportFields.NEEDS_AI_REVIEW) ?: false,
+            wasResubmittedAfterAiReview = getBoolean(FirestoreConstants.ReportFields.WAS_RESUBMITTED_AFTER_AI_REVIEW) ?: false,
+            department = Department.fromFirestoreValue(getString(FirestoreConstants.ReportFields.DEPARTMENT)),
+            priority = ReportPriority.fromFirestoreValue(getString(FirestoreConstants.ReportFields.PRIORITY)),
+            resolutionNote = getString(FirestoreConstants.ReportFields.RESOLUTION_NOTE).orEmpty(),
+            resolutionPhotoPath = getString(FirestoreConstants.ReportFields.RESOLUTION_PHOTO_PATH),
+            upvoteCount = (getLong(FirestoreConstants.ReportFields.UPVOTE_COUNT) ?: 0L).toInt(),
+            upvotedByUids = (get(FirestoreConstants.ReportFields.UPVOTED_BY_UIDS) as? List<*>)
+                ?.filterIsInstance<String>() ?: emptyList(),
         )
     }
 
     private fun Report.toFirestoreMap(): Map<String, Any?> = mapOf(
         FirestoreConstants.ReportFields.USER_ID to userId,
         FirestoreConstants.ReportFields.CATEGORY to category.name,
+        FirestoreConstants.ReportFields.CUSTOM_LABEL to customLabel,
         FirestoreConstants.ReportFields.PHOTO_URL to photoUrl,
         FirestoreConstants.ReportFields.LOCAL_PHOTO_PATH to localPhotoPath,
         FirestoreConstants.ReportFields.LATITUDE to latitude,
@@ -220,5 +354,15 @@ class ReportRepositoryImpl @Inject constructor(
         FirestoreConstants.ReportFields.TIMESTAMP to timestamp,
         FirestoreConstants.ReportFields.NOTE to note,
         FirestoreConstants.ReportFields.STATUS to status.name,
+        FirestoreConstants.ReportFields.AI_SUGGESTED_CATEGORY to aiSuggestedCategory?.name,
+        FirestoreConstants.ReportFields.AI_SUGGESTED_CUSTOM_LABEL to aiSuggestedCustomLabel,
+        FirestoreConstants.ReportFields.NEEDS_AI_REVIEW to needsAiReview,
+        FirestoreConstants.ReportFields.WAS_RESUBMITTED_AFTER_AI_REVIEW to wasResubmittedAfterAiReview,
+        FirestoreConstants.ReportFields.DEPARTMENT to department?.name,
+        FirestoreConstants.ReportFields.PRIORITY to priority.name,
+        FirestoreConstants.ReportFields.RESOLUTION_NOTE to resolutionNote,
+        FirestoreConstants.ReportFields.RESOLUTION_PHOTO_PATH to resolutionPhotoPath,
+        FirestoreConstants.ReportFields.UPVOTE_COUNT to upvoteCount,
+        FirestoreConstants.ReportFields.UPVOTED_BY_UIDS to upvotedByUids,
     )
 }

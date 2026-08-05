@@ -14,6 +14,10 @@ import javax.inject.Singleton
 data class CategorySuggestion(
     val category: ReportCategory,
     val confidence: Float,
+    // Only populated when category == CUSTOM - a short AI-proposed description of an issue that
+    // doesn't match any fixed category (e.g. "Fallen tree"). ML Kit's keyword-based classifier
+    // never proposes CUSTOM (it has no way to generate free text), only VisionClassifierService does.
+    val customLabel: String = "",
 )
 
 @Singleton

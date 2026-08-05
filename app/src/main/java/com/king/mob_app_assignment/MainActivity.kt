@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AdminPanelSettings
@@ -11,6 +12,8 @@ import androidx.compose.material.icons.filled.Assignment
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -22,7 +25,10 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.res.stringResource
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -35,6 +41,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.navigation
 import androidx.navigation.compose.rememberNavController
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.king.mob_app_assignment.data.repository.AuthRepository
 import com.king.mob_app_assignment.domain.model.Report
 import com.king.mob_app_assignment.domain.model.UserRole
@@ -45,6 +52,8 @@ import com.king.mob_app_assignment.ui.auth.RegisterScreen
 import com.king.mob_app_assignment.ui.capture.CaptureScreen
 import com.king.mob_app_assignment.ui.home.HomeScreen
 import com.king.mob_app_assignment.ui.nav.Destinations
+import com.king.mob_app_assignment.ui.nav.PendingReportsBadgeViewModel
+import com.king.mob_app_assignment.ui.onboarding.OnboardingScreen
 import com.king.mob_app_assignment.ui.permissions.PermissionDashboardScreen
 import com.king.mob_app_assignment.ui.permissions.PermissionDashboardViewModel
 import com.king.mob_app_assignment.ui.profile.ProfileScreen
@@ -53,6 +62,7 @@ import com.king.mob_app_assignment.ui.reports.ReportDetailScreen
 import com.king.mob_app_assignment.ui.reports.ReportsTabScreen
 import com.king.mob_app_assignment.ui.settings.SettingsScreen
 import com.king.mob_app_assignment.ui.theme.AppTheme
+import com.king.mob_app_assignment.util.OnboardingPreferences
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -65,7 +75,10 @@ class MainActivity : ComponentActivity() {
 
     @Inject lateinit var shakeDetector: ShakeDetector
 
+    @Inject lateinit var onboardingPreferences: OnboardingPreferences
+
     override fun onCreate(savedInstanceState: Bundle?) {
+        installSplashScreen()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -74,6 +87,7 @@ class MainActivity : ComponentActivity() {
             AppTheme {
                 Surface(modifier = Modifier, color = MaterialTheme.colorScheme.background) {
                     val navController = rememberNavController()
+                    val hapticFeedback = LocalHapticFeedback.current
 
                     // LifecycleStartEffect (re)starts collection on ON_START and cancels it on
                     // ON_STOP, which registers/unregisters the SensorManager listener inside
@@ -82,6 +96,7 @@ class MainActivity : ComponentActivity() {
                     androidx.lifecycle.compose.LifecycleStartEffect(Unit) {
                         val job = lifecycleScope.launch {
                             shakeDetector.onShakeDetected().collectLatest {
+                                hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
                                 navController.navigate(Destinations.CAPTURE) {
                                     launchSingleTop = true
                                 }
@@ -91,11 +106,17 @@ class MainActivity : ComponentActivity() {
                     }
 
                     val currentUser by authRepository.currentUser.collectAsState(initial = null)
+                    val hasCompletedOnboarding by onboardingPreferences.hasCompletedOnboardingFlow
+                        .collectAsState(initial = null)
 
                     RootNavGraph(
                         navController = navController,
                         isLoggedIn = currentUser != null,
                         isAdmin = currentUser?.role == UserRole.ADMIN,
+                        hasCompletedOnboarding = hasCompletedOnboarding,
+                        onOnboardingFinished = {
+                            lifecycleScope.launch { onboardingPreferences.setOnboardingCompleted() }
+                        },
                     )
                 }
             }
@@ -108,12 +129,42 @@ private fun RootNavGraph(
     navController: NavHostController,
     isLoggedIn: Boolean,
     isAdmin: Boolean,
+    hasCompletedOnboarding: Boolean?,
+    onOnboardingFinished: () -> Unit,
 ) {
-    val startGraph = if (isLoggedIn) Destinations.MAIN_GRAPH else Destinations.AUTH_GRAPH
+    // hasCompletedOnboarding is null until the first DataStore emission arrives; treat that
+    // briefly as "already onboarded" so returning users aren't flashed the walkthrough while
+    // the flag loads - a fresh install still gets it once collectAsState settles to false.
+    val startGraph = when {
+        hasCompletedOnboarding == false -> Destinations.ONBOARDING_GRAPH
+        isLoggedIn -> Destinations.MAIN_GRAPH
+        else -> Destinations.AUTH_GRAPH
+    }
 
     NavHost(navController = navController, startDestination = startGraph) {
+        onboardingGraph(navController, isLoggedIn, onOnboardingFinished)
         authGraph(navController)
         mainGraph(navController, isAdmin)
+    }
+}
+
+private fun NavGraphBuilder.onboardingGraph(
+    navController: NavHostController,
+    isLoggedIn: Boolean,
+    onOnboardingFinished: () -> Unit,
+) {
+    navigation(startDestination = Destinations.ONBOARDING, route = Destinations.ONBOARDING_GRAPH) {
+        composable(Destinations.ONBOARDING) {
+            OnboardingScreen(
+                onFinished = {
+                    onOnboardingFinished()
+                    val nextGraph = if (isLoggedIn) Destinations.MAIN_GRAPH else Destinations.AUTH_GRAPH
+                    navController.navigate(nextGraph) {
+                        popUpTo(Destinations.ONBOARDING_GRAPH) { inclusive = true }
+                    }
+                },
+            )
+        }
     }
 }
 
@@ -192,6 +243,7 @@ private fun NavGraphBuilder.mainGraph(
         composable(Destinations.SETTINGS) {
             SettingsScreen(
                 onOpenPermissionDashboard = { navController.navigate(Destinations.PERMISSION_DASHBOARD) },
+                onBackClick = { navController.popBackStack() },
             )
         }
         composable(Destinations.PERMISSION_DASHBOARD) {
@@ -206,7 +258,10 @@ private fun NavGraphBuilder.mainGraph(
                 }
             }
             val viewModel: PermissionDashboardViewModel = viewModel(factory = factory)
-            PermissionDashboardScreen(viewModel = viewModel)
+            PermissionDashboardScreen(
+                viewModel = viewModel,
+                onBackClick = { navController.popBackStack() },
+            )
         }
         composable(Destinations.CAPTURE) {
             CaptureScreen(
@@ -220,7 +275,7 @@ private fun NavGraphBuilder.mainGraph(
             )
         }
         composable(Destinations.REPORT_DETAIL_ROUTE) {
-            ReportDetailScreen()
+            ReportDetailScreen(onBackClick = { navController.popBackStack() })
         }
     }
 }
@@ -229,6 +284,7 @@ private data class BottomNavItem(
     val route: String,
     val label: String,
     val icon: androidx.compose.ui.graphics.vector.ImageVector,
+    val badgeCount: Int = 0,
 )
 
 @Composable
@@ -237,13 +293,22 @@ private fun MainScaffold(
     isAdmin: Boolean,
     content: @Composable () -> Unit,
 ) {
-    val items = remember(isAdmin) {
+    val homeLabel = stringResource(R.string.nav_home)
+    val reportsLabel = stringResource(R.string.nav_reports)
+    val myReportsLabel = stringResource(R.string.nav_my_reports)
+    val profileLabel = stringResource(R.string.nav_profile)
+    val adminLabel = stringResource(R.string.nav_admin)
+
+    val badgeViewModel: PendingReportsBadgeViewModel = hiltViewModel()
+    val pendingCount by badgeViewModel.pendingCount.collectAsState()
+
+    val items = remember(isAdmin, homeLabel, reportsLabel, myReportsLabel, profileLabel, adminLabel, pendingCount) {
         buildList {
-            add(BottomNavItem(Destinations.HOME, "Home", Icons.Filled.Home))
-            add(BottomNavItem(Destinations.REPORTS, "Reports", Icons.Filled.List))
-            add(BottomNavItem(Destinations.MY_REPORTS, "My Reports", Icons.Filled.Assignment))
-            add(BottomNavItem(Destinations.PROFILE, "Profile", Icons.Filled.Person))
-            if (isAdmin) add(BottomNavItem(Destinations.ADMIN_REPORTS, "Admin", Icons.Filled.AdminPanelSettings))
+            add(BottomNavItem(Destinations.HOME, homeLabel, Icons.Filled.Home))
+            add(BottomNavItem(Destinations.REPORTS, reportsLabel, Icons.Filled.List))
+            add(BottomNavItem(Destinations.MY_REPORTS, myReportsLabel, Icons.Filled.Assignment, badgeCount = pendingCount))
+            add(BottomNavItem(Destinations.PROFILE, profileLabel, Icons.Filled.Person))
+            if (isAdmin) add(BottomNavItem(Destinations.ADMIN_REPORTS, adminLabel, Icons.Filled.AdminPanelSettings))
         }
     }
 
@@ -265,7 +330,15 @@ private fun MainScaffold(
                                 }
                             }
                         },
-                        icon = { androidx.compose.material3.Icon(item.icon, contentDescription = item.label) },
+                        icon = {
+                            if (item.badgeCount > 0) {
+                                BadgedBox(badge = { Badge { Text(item.badgeCount.toString()) } }) {
+                                    androidx.compose.material3.Icon(item.icon, contentDescription = item.label)
+                                }
+                            } else {
+                                androidx.compose.material3.Icon(item.icon, contentDescription = item.label)
+                            }
+                        },
                         label = { Text(item.label) },
                     )
                 }

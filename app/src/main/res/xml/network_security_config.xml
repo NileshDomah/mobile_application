@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!--
+      Cleartext (plain HTTP) is only permitted to the developer's local LM Studio
+      server during development/testing - never enabled app-wide. Once a real
+      hosted HTTPS API key is available, VisionAiConfig's baseUrl changes and this
+      domain-specific cleartext exception becomes unused (kept here documented,
+      not removed, in case local-model testing is needed again later).
+    -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">172.16.60.31</domain>
+    </domain-config>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>
