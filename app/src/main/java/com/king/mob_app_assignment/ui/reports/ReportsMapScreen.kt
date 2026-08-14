@@ -68,6 +68,13 @@ fun ReportsMapScreen(
             factory = { ctx ->
                 MapLibre.getInstance(ctx)
                 MapView(ctx).apply {
+                    // onCreate() must be called before getMapAsync() - it's what actually
+                    // triggers native map surface creation on this MapLibre version. Without it,
+                    // getMapAsync's callback can silently never fire: the GL SurfaceView still
+                    // renders (its idle clear-color background is visible), but no style/tile
+                    // network request is ever issued - exactly the "blank map, zero network
+                    // activity in Logcat" symptom this was debugged from.
+                    onCreate(null)
                     mapViewRef = this
                     getMapAsync { maplibreMap ->
                         maplibreMap.setStyle(GeoApiConfig.styleUrl())

@@ -24,6 +24,7 @@ data class AdminReportsUiState(
     val filter: ReportFilterState = ReportFilterState(),
     val isLoading: Boolean = true,
     val isRefreshing: Boolean = false,
+    val errorMessage: String? = null,
 )
 
 @HiltViewModel
@@ -39,21 +40,35 @@ class AdminReportsViewModel @Inject constructor(
         .flatMapLatest { reportRepository.getAllReports() }
         .catch { emit(emptyList()) }
 
+    private val errorFlow = MutableStateFlow<String?>(null)
+
+    init {
+        viewModelScope.launch {
+            reportRepository.reportListErrors.collect { message -> errorFlow.value = message }
+        }
+    }
+
     val uiState: StateFlow<AdminReportsUiState> = combine(
         reportsFlow,
         filterFlow,
         isRefreshingFlow,
-    ) { reports, filter, isRefreshing ->
+        errorFlow,
+    ) { reports, filter, isRefreshing, errorMessage ->
         AdminReportsUiState(
             reports = reports.applyFilter(filter),
             filter = filter,
             isLoading = false,
             isRefreshing = isRefreshing,
+            errorMessage = errorMessage,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AdminReportsUiState())
 
     fun onFilterChange(filter: ReportFilterState) {
         filterFlow.value = filter
+    }
+
+    fun dismissError() {
+        errorFlow.value = null
     }
 
     fun updateStatus(reportId: String, status: ReportStatus) {
@@ -66,6 +81,7 @@ class AdminReportsViewModel @Inject constructor(
         if (isRefreshingFlow.value) return
         viewModelScope.launch {
             isRefreshingFlow.value = true
+            errorFlow.value = null
             refreshTriggerFlow.value += 1
             delay(400)
             isRefreshingFlow.value = false

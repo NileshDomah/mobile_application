@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -27,6 +28,7 @@ import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Notes
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -57,14 +59,17 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import com.king.mob_app_assignment.domain.model.Department
 import com.king.mob_app_assignment.domain.model.ReportCategory
+import com.king.mob_app_assignment.domain.model.ReportMediaType
 import com.king.mob_app_assignment.domain.model.ReportPriority
 import com.king.mob_app_assignment.domain.model.ReportStatus
 import com.king.mob_app_assignment.domain.model.displayLabel
+import com.king.mob_app_assignment.domain.model.reportReferenceCode
 import com.king.mob_app_assignment.ui.components.AppTopBar
 import com.king.mob_app_assignment.ui.components.CategoryChip
 import com.king.mob_app_assignment.ui.components.LoadingIndicator
 import com.king.mob_app_assignment.ui.components.PrimaryActionButton
 import com.king.mob_app_assignment.ui.components.StatusBadge
+import com.king.mob_app_assignment.ui.components.VideoPlayer
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import java.io.File
@@ -119,6 +124,17 @@ fun ReportDetailScreen(
         )
     }
 
+    if (uiState.deleteErrorMessage != null) {
+        AlertDialog(
+            onDismissRequest = viewModel::dismissDeleteError,
+            title = { Text("Couldn't delete report") },
+            text = { Text(uiState.deleteErrorMessage.orEmpty()) },
+            confirmButton = {
+                TextButton(onClick = viewModel::dismissDeleteError) { Text("OK") }
+            },
+        )
+    }
+
     Scaffold(
         topBar = {
             AppTopBar(
@@ -155,15 +171,55 @@ fun ReportDetailScreen(
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                AsyncImage(
-                    model = report.photoUrl ?: report.localPhotoPath,
-                    contentDescription = "Report photo",
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(3f / 4f)
-                        .clip(MaterialTheme.shapes.medium),
-                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                Text(
+                    text = reportReferenceCode(report.id),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
                 )
+
+                if (report.mediaType == ReportMediaType.VIDEO) {
+                    // videoUrl (a real http(s) URL, were Firebase Storage ever added - see
+                    // PLACEHOLDERS_TODO.csv) can go through Uri.parse directly; localVideoPath is
+                    // a raw filesystem path and needs Uri.fromFile so ExoPlayer resolves it.
+                    val videoUri = report.videoUrl?.let(Uri::parse)
+                        ?: report.localVideoPath?.let { File(it) }?.let(Uri::fromFile)
+                    if (videoUri != null) {
+                        VideoPlayer(
+                            uri = videoUri,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(3f / 4f)
+                                .clip(MaterialTheme.shapes.medium),
+                        )
+                    }
+                } else {
+                    AsyncImage(
+                        model = report.photoUrl ?: report.localPhotoPath,
+                        contentDescription = "Report photo",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(3f / 4f)
+                            .clip(MaterialTheme.shapes.medium),
+                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    )
+                }
+
+                if (report.isAnonymous) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Filled.VisibilityOff,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Text(
+                            text = "Submitted anonymously",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 6.dp),
+                        )
+                    }
+                }
 
                 if (report.needsAiReview && !uiState.isEditing) {
                     Card(
@@ -281,6 +337,14 @@ fun ReportDetailScreen(
                             )
                         }
                     }
+                }
+
+                if (!uiState.isEditing) {
+                    StatusTimelineCard(
+                        history = report.statusHistory,
+                        fallbackStatus = report.status,
+                        fallbackTimestamp = report.timestamp,
+                    )
                 }
 
                 if (!uiState.isAdmin && !uiState.isEditing) {

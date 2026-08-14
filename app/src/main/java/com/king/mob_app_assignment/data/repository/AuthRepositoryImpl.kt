@@ -42,8 +42,11 @@ class AuthRepositoryImpl @Inject constructor(
             .addOnFailureListener { onResult(null) }
     }
 
-    override suspend fun register(email: String, password: String, displayName: String): Result<User> =
+    override suspend fun register(email: String, password: String, displayName: String, username: String): Result<User> =
         runCatching {
+            val normalizedUsername = username.trim().lowercase()
+            require(normalizedUsername.isNotBlank()) { "Username is required" }
+
             val authResult = firebaseAuth.createUserWithEmailAndPassword(email, password).await()
             val firebaseUser = authResult.user ?: error("Registration failed: no user returned")
 
@@ -56,15 +59,63 @@ class AuthRepositoryImpl @Inject constructor(
                 uid = firebaseUser.uid,
                 email = email,
                 displayName = displayName,
+                username = normalizedUsername,
                 role = UserRole.CITIZEN,
             )
-            firestore.collection(FirestoreConstants.USERS_COLLECTION)
-                .document(firebaseUser.uid)
-                .set(newUser.toFirestoreMap())
-                .await()
+
+            // Reserving the username and writing the user doc inside one transaction closes the
+            // race window between isUsernameTaken()'s earlier check (used for live UI feedback)
+            // and the actual write - two registrations racing on the same username can't both
+            // succeed, since Firestore transactions abort-and-retry on a conflicting concurrent
+            // write to any document they've read. If the username was taken in the meantime
+            // (e.g. by a concurrent registration), this throws and the whole registration
+            // reports failure - the already-created FirebaseAuth account is left as-is rather
+            // than attempting a compensating delete, a known gap (see PLACEHOLDERS_TODO.csv).
+            firestore.runTransaction { transaction ->
+                val usernameDocRef = firestore.collection(FirestoreConstants.USERNAMES_COLLECTION)
+                    .document(normalizedUsername)
+                val existing = transaction.get(usernameDocRef)
+                if (existing.exists()) {
+                    error("That username is already taken")
+                }
+                transaction.set(usernameDocRef, mapOf(FirestoreConstants.UsernameFields.UID to firebaseUser.uid))
+                transaction.set(
+                    firestore.collection(FirestoreConstants.USERS_COLLECTION).document(firebaseUser.uid),
+                    newUser.toFirestoreMap(),
+                )
+            }.await()
 
             newUser
         }
+
+    override suspend fun isUsernameTaken(username: String): Boolean {
+        val normalized = username.trim().lowercase()
+        if (normalized.isBlank()) return false
+        return runCatching {
+            firestore.collection(FirestoreConstants.USERNAMES_COLLECTION)
+                .document(normalized)
+                .get()
+                .await()
+                .exists()
+        }.getOrDefault(false)
+    }
+
+    override suspend fun resolveUsernameToEmail(username: String): String? {
+        val normalized = username.trim().lowercase()
+        if (normalized.isBlank()) return null
+        return runCatching {
+            val usernameSnapshot = firestore.collection(FirestoreConstants.USERNAMES_COLLECTION)
+                .document(normalized)
+                .get()
+                .await()
+            val uid = usernameSnapshot.getString(FirestoreConstants.UsernameFields.UID) ?: return null
+            firestore.collection(FirestoreConstants.USERS_COLLECTION)
+                .document(uid)
+                .get()
+                .await()
+                .getString(FirestoreConstants.UserFields.EMAIL)
+        }.getOrNull()
+    }
 
     override suspend fun login(email: String, password: String): Result<User> =
         runCatching {
@@ -103,6 +154,7 @@ class AuthRepositoryImpl @Inject constructor(
             uid = getString(FirestoreConstants.UserFields.UID) ?: id,
             email = getString(FirestoreConstants.UserFields.EMAIL).orEmpty(),
             displayName = getString(FirestoreConstants.UserFields.DISPLAY_NAME).orEmpty(),
+            username = getString(FirestoreConstants.UserFields.USERNAME).orEmpty(),
             role = UserRole.fromFirestoreValue(getString(FirestoreConstants.UserFields.ROLE)),
         )
     }
@@ -111,6 +163,7 @@ class AuthRepositoryImpl @Inject constructor(
         FirestoreConstants.UserFields.UID to uid,
         FirestoreConstants.UserFields.EMAIL to email,
         FirestoreConstants.UserFields.DISPLAY_NAME to displayName,
+        FirestoreConstants.UserFields.USERNAME to username,
         FirestoreConstants.UserFields.ROLE to role.name,
     )
 }

@@ -4,6 +4,8 @@ import com.king.mob_app_assignment.data.repository.AuthRepository
 import com.king.mob_app_assignment.data.repository.AuthRepositoryImpl
 import com.king.mob_app_assignment.data.repository.ReportRepository
 import com.king.mob_app_assignment.data.repository.ReportRepositoryImpl
+import com.king.mob_app_assignment.data.repository.SupportRepository
+import com.king.mob_app_assignment.data.repository.SupportRepositoryImpl
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -21,4 +23,8 @@ abstract class RepositoryModule {
     @Binds
     @Singleton
     abstract fun bindReportRepository(impl: ReportRepositoryImpl): ReportRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindSupportRepository(impl: SupportRepositoryImpl): SupportRepository
 }

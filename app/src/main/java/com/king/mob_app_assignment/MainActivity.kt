@@ -1,19 +1,25 @@
 package com.king.mob_app_assignment
 
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.enableEdgeToEdge
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Assignment
+import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -24,11 +30,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -46,10 +54,12 @@ import com.king.mob_app_assignment.data.repository.AuthRepository
 import com.king.mob_app_assignment.domain.model.Report
 import com.king.mob_app_assignment.domain.model.UserRole
 import com.king.mob_app_assignment.sensor.ShakeDetector
+import com.king.mob_app_assignment.ui.admin.AdminDashboardScreen
 import com.king.mob_app_assignment.ui.admin.AdminReportsScreen
 import com.king.mob_app_assignment.ui.auth.LoginScreen
 import com.king.mob_app_assignment.ui.auth.RegisterScreen
 import com.king.mob_app_assignment.ui.capture.CaptureScreen
+import com.king.mob_app_assignment.ui.chat.ChatScreen
 import com.king.mob_app_assignment.ui.home.HomeScreen
 import com.king.mob_app_assignment.ui.nav.Destinations
 import com.king.mob_app_assignment.ui.nav.PendingReportsBadgeViewModel
@@ -69,7 +79,7 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @AndroidEntryPoint
-class MainActivity : ComponentActivity() {
+class MainActivity : AppCompatActivity() {
 
     @Inject lateinit var authRepository: AuthRepository
 
@@ -77,11 +87,16 @@ class MainActivity : ComponentActivity() {
 
     @Inject lateinit var onboardingPreferences: OnboardingPreferences
 
+    // Set when launched from ShakeBackgroundService after a shake fired while the app was
+    // closed/backgrounded - consumed once by the nav graph below to jump straight to Capture.
+    private var pendingCaptureLaunch = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        pendingCaptureLaunch = intent?.getBooleanExtra(EXTRA_LAUNCH_CAPTURE, false) == true
 
         setContent {
             AppTheme {
@@ -109,6 +124,13 @@ class MainActivity : ComponentActivity() {
                     val hasCompletedOnboarding by onboardingPreferences.hasCompletedOnboardingFlow
                         .collectAsState(initial = null)
 
+                    androidx.compose.runtime.LaunchedEffect(pendingCaptureLaunch, currentUser) {
+                        if (pendingCaptureLaunch && currentUser != null) {
+                            pendingCaptureLaunch = false
+                            navController.navigate(Destinations.CAPTURE) { launchSingleTop = true }
+                        }
+                    }
+
                     RootNavGraph(
                         navController = navController,
                         isLoggedIn = currentUser != null,
@@ -121,6 +143,10 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    companion object {
+        const val EXTRA_LAUNCH_CAPTURE = "extra_launch_capture"
     }
 }
 
@@ -141,10 +167,33 @@ private fun RootNavGraph(
         else -> Destinations.AUTH_GRAPH
     }
 
-    NavHost(navController = navController, startDestination = startGraph) {
-        onboardingGraph(navController, isLoggedIn, onOnboardingFinished)
-        authGraph(navController)
-        mainGraph(navController, isAdmin)
+    Box(modifier = Modifier.fillMaxSize()) {
+        NavHost(navController = navController, startDestination = startGraph) {
+            onboardingGraph(navController, isLoggedIn, onOnboardingFinished)
+            authGraph(navController)
+            mainGraph(navController, isAdmin)
+        }
+
+        // Hoisted above mainGraph's per-screen composables (rather than inside MainScaffold)
+        // specifically so it appears on EVERY main-graph screen, including Capture/ReportDetail/
+        // Settings/PermissionDashboard - none of which wrap MainScaffold (only the bottom-nav-
+        // tab screens do, see MainScaffold's callers below). Hidden on auth/onboarding (nothing
+        // to help with yet - no signed-in user, no report context) and on the Chat screen itself
+        // (no point floating a button to open the screen you're already on).
+        if (isLoggedIn) {
+            val backStackEntry by navController.currentBackStackEntryAsState()
+            val currentRoute = backStackEntry?.destination?.route
+            if (currentRoute != Destinations.CHAT) {
+                FloatingActionButton(
+                    onClick = { navController.navigate(Destinations.CHAT) },
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 16.dp, bottom = 88.dp),
+                ) {
+                    Icon(Icons.Filled.SmartToy, contentDescription = "Help assistant")
+                }
+            }
+        }
     }
 }
 
@@ -234,10 +283,21 @@ private fun NavGraphBuilder.mainGraph(
             }
         }
         composable(Destinations.ADMIN_REPORTS) {
-            MainScaffold(navController = navController, isAdmin = isAdmin) {
-                AdminReportsScreen(
-                    onReportClick = { report -> navController.navigate(Destinations.reportDetail(report.id)) },
-                )
+            AdminRouteGuard(isAdmin = isAdmin, navController = navController) {
+                MainScaffold(navController = navController, isAdmin = isAdmin) {
+                    AdminReportsScreen(
+                        onReportClick = { report -> navController.navigate(Destinations.reportDetail(report.id)) },
+                    )
+                }
+            }
+        }
+        composable(Destinations.ADMIN_DASHBOARD) {
+            AdminRouteGuard(isAdmin = isAdmin, navController = navController) {
+                MainScaffold(navController = navController, isAdmin = isAdmin) {
+                    AdminDashboardScreen(
+                        onReportClick = { report -> navController.navigate(Destinations.reportDetail(report.id)) },
+                    )
+                }
             }
         }
         composable(Destinations.SETTINGS) {
@@ -277,6 +337,33 @@ private fun NavGraphBuilder.mainGraph(
         composable(Destinations.REPORT_DETAIL_ROUTE) {
             ReportDetailScreen(onBackClick = { navController.popBackStack() })
         }
+        composable(Destinations.CHAT) {
+            ChatScreen(onBackClick = { navController.popBackStack() })
+        }
+    }
+}
+
+// Client-side defense-in-depth on top of firestore.rules' isAdmin() server-side check: before
+// this, admin routes were only ever hidden from the bottom nav - a non-admin who somehow
+// deep-linked the route string directly would still render the admin composable (even though
+// any Firestore reads inside it would then fail server-side). This redirects them out of the
+// admin route entirely the instant isAdmin is false, rather than relying solely on nav-tab
+// visibility to keep them away.
+@Composable
+private fun AdminRouteGuard(
+    isAdmin: Boolean,
+    navController: NavHostController,
+    content: @Composable () -> Unit,
+) {
+    androidx.compose.runtime.LaunchedEffect(isAdmin) {
+        if (!isAdmin) {
+            navController.navigate(Destinations.HOME) {
+                popUpTo(Destinations.MAIN_GRAPH) { inclusive = false }
+            }
+        }
+    }
+    if (isAdmin) {
+        content()
     }
 }
 
@@ -298,17 +385,23 @@ private fun MainScaffold(
     val myReportsLabel = stringResource(R.string.nav_my_reports)
     val profileLabel = stringResource(R.string.nav_profile)
     val adminLabel = stringResource(R.string.nav_admin)
+    val adminDashboardLabel = stringResource(R.string.nav_admin_dashboard)
 
     val badgeViewModel: PendingReportsBadgeViewModel = hiltViewModel()
     val pendingCount by badgeViewModel.pendingCount.collectAsState()
 
-    val items = remember(isAdmin, homeLabel, reportsLabel, myReportsLabel, profileLabel, adminLabel, pendingCount) {
+    val items = remember(
+        isAdmin, homeLabel, reportsLabel, myReportsLabel, profileLabel, adminLabel, adminDashboardLabel, pendingCount,
+    ) {
         buildList {
             add(BottomNavItem(Destinations.HOME, homeLabel, Icons.Filled.Home))
             add(BottomNavItem(Destinations.REPORTS, reportsLabel, Icons.Filled.List))
             add(BottomNavItem(Destinations.MY_REPORTS, myReportsLabel, Icons.Filled.Assignment, badgeCount = pendingCount))
             add(BottomNavItem(Destinations.PROFILE, profileLabel, Icons.Filled.Person))
-            if (isAdmin) add(BottomNavItem(Destinations.ADMIN_REPORTS, adminLabel, Icons.Filled.AdminPanelSettings))
+            if (isAdmin) {
+                add(BottomNavItem(Destinations.ADMIN_REPORTS, adminLabel, Icons.Filled.AdminPanelSettings))
+                add(BottomNavItem(Destinations.ADMIN_DASHBOARD, adminDashboardLabel, Icons.Filled.Dashboard))
+            }
         }
     }
 

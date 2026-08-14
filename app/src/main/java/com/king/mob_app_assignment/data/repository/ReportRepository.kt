@@ -10,6 +10,12 @@ import java.io.File
 
 interface ReportRepository {
 
+    // One-shot events (no replay) for a report-list snapshot listener failing - e.g. a genuine
+    // PERMISSION_DENIED, not the brief null-snapshot blips already filtered out below. Meant to
+    // drive a dismissible Snackbar/banner in the UI, not to replace the list with a full error
+    // screen (the list still shows whatever it last had, which is the friendlier behavior).
+    val reportListErrors: Flow<String>
+
     fun getAllReports(): Flow<List<Report>>
 
     fun getReportsForUser(uid: String): Flow<List<Report>>
@@ -56,7 +62,15 @@ interface ReportRepository {
     // Called by AiReviewCoordinator when a report was submitted as UNCATEGORIZED (user skipped
     // the category picker) and the AI confidently classifies it - sets the real category
     // directly, no review flag needed since the user never made a choice to disagree with.
-    suspend fun applyAiCategory(id: String, category: ReportCategory, customLabel: String = ""): Result<Unit>
+    // priority is the AI's severity guess (only ever non-NORMAL from the Gemma vision path, see
+    // CategorySuggestion.priority) - applied alongside category since both come from the same
+    // classification pass, rather than a second separate write.
+    suspend fun applyAiCategory(
+        id: String,
+        category: ReportCategory,
+        customLabel: String = "",
+        priority: ReportPriority = ReportPriority.NORMAL,
+    ): Result<Unit>
 
     // Owner-only: clears needsAiReview after the user updates the category/note in response to
     // an AI flag, and marks the report as having gone through that resubmit-after-AI-review path

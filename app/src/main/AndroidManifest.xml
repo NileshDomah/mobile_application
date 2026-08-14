@@ -3,11 +3,20 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Required by some OEM camera apps to record audio alongside video for CaptureVideo()
+         intents - the system camera activity itself requests this, but a few devices also check
+         that the calling app holds it. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Normal (auto-granted) permission - no runtime request flow needed, unlike CAMERA/
+         LOCATION/NOTIFICATIONS above. Gates BiometricPrompt/BiometricManager usage. -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <uses-feature
         android:name="android.hardware.camera"
@@ -35,6 +44,15 @@
             </intent-filter>
         </activity>
 
+        <service
+            android:name=".sensor.ShakeBackgroundService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Continuously listens for a shake gesture (accelerometer) to let the user file a civic issue report without opening the app first." />
+        </service>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -43,6 +61,21 @@
             <meta-data
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/provider_paths" />
+        </provider>
+
+        <!-- WorkManager auto-initializes via this provider by default; removed so our own
+             Configuration.Provider (MobAppAssignment, wired to HiltWorkerFactory) is the only
+             configuration WorkManager sees - required for @HiltWorker classes like
+             ClassificationWorker to receive their dependencies. -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
         </provider>
 
     </application>

@@ -10,6 +10,11 @@ data class PendingReportEntity(
     val category: String,
     val customLabel: String = "",
     val localPhotoPath: String,
+    // Populated instead of localPhotoPath when mediaType == "VIDEO" - mirrors Report's
+    // mediaType/localVideoPath split. localPhotoPath stays "" for a queued video report.
+    val mediaType: String = "PHOTO",
+    val localVideoPath: String = "",
+    val isAnonymous: Boolean = false,
     val latitude: Double,
     val longitude: Double,
     val address: String,

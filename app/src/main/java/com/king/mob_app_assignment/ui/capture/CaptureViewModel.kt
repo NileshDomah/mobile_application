@@ -3,20 +3,25 @@ package com.king.mob_app_assignment.ui.capture
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.work.Constraints
+import androidx.work.Data
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
 import com.google.firebase.auth.FirebaseAuth
-import com.king.mob_app_assignment.ai.AiReviewCoordinator
+import com.king.mob_app_assignment.ai.ClassificationWorker
 import com.king.mob_app_assignment.data.local.PendingReportDao
 import com.king.mob_app_assignment.data.local.PendingReportEntity
 import com.king.mob_app_assignment.data.location.LocationProvider
 import com.king.mob_app_assignment.data.repository.ReportRepository
 import com.king.mob_app_assignment.domain.model.Report
 import com.king.mob_app_assignment.domain.model.ReportCategory
+import com.king.mob_app_assignment.domain.model.ReportMediaType
 import com.king.mob_app_assignment.sensor.CompassProvider
 import com.king.mob_app_assignment.util.CrashReporter
 import com.king.mob_app_assignment.util.ExifStripper
 import com.king.mob_app_assignment.util.NoteSanitizer
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -44,6 +49,11 @@ data class CaptureUiState(
     val stage: CaptureStage = CaptureStage.IDLE,
     val photoUri: Uri? = null,
     val photoFile: File? = null,
+    // Set instead of photoUri/photoFile when the user recorded/picked a video. Mutually
+    // exclusive with photoUri/photoFile by construction - see onVideoCaptured vs onPhotoCaptured.
+    val videoUri: Uri? = null,
+    val videoFile: File? = null,
+    val mediaType: ReportMediaType = ReportMediaType.PHOTO,
     val selectedCategory: ReportCategory? = null,
     val customLabel: String = "",
     val note: String = "",
@@ -56,17 +66,17 @@ data class CaptureUiState(
     val errorMessage: String? = null,
     val duplicateCandidate: Report? = null,
     val wasQueuedOffline: Boolean = false,
+    val isAnonymous: Boolean = false,
 )
 
 @HiltViewModel
 class CaptureViewModel @Inject constructor(
     private val locationProvider: LocationProvider,
     private val compassProvider: CompassProvider,
-    private val aiReviewCoordinator: AiReviewCoordinator,
-    private val appScope: CoroutineScope,
     private val pendingReportDao: PendingReportDao,
     private val reportRepository: ReportRepository,
     private val firebaseAuth: FirebaseAuth,
+    private val workManager: WorkManager,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(CaptureUiState())
@@ -74,8 +84,21 @@ class CaptureViewModel @Inject constructor(
 
     fun onPhotoCaptured(uri: Uri, file: File) {
         _uiState.update {
-            CaptureUiState(stage = CaptureStage.PREVIEW, photoUri = uri, photoFile = file)
+            CaptureUiState(stage = CaptureStage.PREVIEW, photoUri = uri, photoFile = file, mediaType = ReportMediaType.PHOTO)
         }
+    }
+
+    // Video reports skip AI classification entirely (see submit()'s manual-category requirement
+    // below) - the user's explicit choice was to avoid AI video analysis and just require manual
+    // category input for video reports instead.
+    fun onVideoCaptured(uri: Uri, file: File) {
+        _uiState.update {
+            CaptureUiState(stage = CaptureStage.PREVIEW, videoUri = uri, videoFile = file, mediaType = ReportMediaType.VIDEO)
+        }
+    }
+
+    fun onAnonymousToggle(enabled: Boolean) {
+        _uiState.update { it.copy(isAnonymous = enabled) }
     }
 
     fun onRetake() {
@@ -89,6 +112,8 @@ class CaptureViewModel @Inject constructor(
         _uiState.update { it.copy(stage = CaptureStage.ANALYZING, errorMessage = null) }
 
         viewModelScope.launch {
+            // EXIF stripping only applies to photos - video files don't carry the same
+            // location-tagged EXIF metadata risk (video metadata isn't touched by ExifInterface).
             photoFile?.let { ExifStripper.stripSensitiveTags(it) }
 
             val captureTimestamp = System.currentTimeMillis()
@@ -141,15 +166,30 @@ class CaptureViewModel @Inject constructor(
 
     fun submit() {
         val state = _uiState.value
-        // Category selection is optional: if the user doesn't pick one, the report submits as
-        // UNCATEGORIZED and AiReviewCoordinator fills in the real category once it classifies
-        // the photo in the background (see doSubmit()).
-        val category = state.selectedCategory ?: ReportCategory.UNCATEGORIZED
-        val photoFile = state.photoFile
-        if (photoFile == null) {
+        val isVideo = state.mediaType == ReportMediaType.VIDEO
+
+        if (isVideo) {
+            if (state.videoFile == null) {
+                _uiState.update { it.copy(errorMessage = "Something went wrong with the video - please retake it") }
+                return
+            }
+            // Category selection is REQUIRED for video reports - the user's explicit choice was
+            // to avoid AI video analysis entirely, so there's no background classifier that can
+            // fill this in later the way AiReviewCoordinator does for photos.
+            if (state.selectedCategory == null) {
+                _uiState.update { it.copy(errorMessage = "Please choose a category for this video report") }
+                return
+            }
+        } else if (state.photoFile == null) {
             _uiState.update { it.copy(errorMessage = "Something went wrong with the photo - please retake it") }
             return
         }
+
+        // For photos, category selection stays optional: if skipped, the report submits as
+        // UNCATEGORIZED and AiReviewCoordinator fills in the real category in the background
+        // (see doSubmit()/enqueueClassificationWork). Video reports can't reach this fallback -
+        // selectedCategory is guaranteed non-null for video by the check above.
+        val category = state.selectedCategory ?: ReportCategory.UNCATEGORIZED
         if (category == ReportCategory.CUSTOM && state.customLabel.isBlank()) {
             _uiState.update { it.copy(errorMessage = "Describe the issue before submitting") }
             return
@@ -187,17 +227,28 @@ class CaptureViewModel @Inject constructor(
 
     private suspend fun doSubmit() {
         val state = _uiState.value
+        val isVideo = state.mediaType == ReportMediaType.VIDEO
         val category = state.selectedCategory ?: ReportCategory.UNCATEGORIZED
-        val photoFile = state.photoFile ?: return
+        val photoFile = state.photoFile
+        val videoFile = state.videoFile
+        if (isVideo && videoFile == null) return
+        if (!isVideo && photoFile == null) return
 
         _uiState.update { it.copy(stage = CaptureStage.SUBMITTING, errorMessage = null) }
 
-        val userId = firebaseAuth.currentUser?.uid.orEmpty()
+        // Anonymous reports store no owner at all (empty userId, isAnonymous = true) - see
+        // Report.isAnonymous doc. The submitter still needs to be signed in to use the app (this
+        // is enforced elsewhere, not here), but that identity is deliberately never attached to
+        // the report document.
+        val userId = if (state.isAnonymous) "" else firebaseAuth.currentUser?.uid.orEmpty()
         val report = Report(
             userId = userId,
+            isAnonymous = state.isAnonymous,
             category = category,
             customLabel = if (category == ReportCategory.CUSTOM) state.customLabel.trim() else "",
-            localPhotoPath = photoFile.absolutePath,
+            mediaType = state.mediaType,
+            localPhotoPath = photoFile?.absolutePath,
+            localVideoPath = videoFile?.absolutePath,
             latitude = state.latitude,
             longitude = state.longitude,
             address = state.address,
@@ -207,19 +258,17 @@ class CaptureViewModel @Inject constructor(
             note = state.note,
         )
 
-        CrashReporter.log("CaptureViewModel: submitting report category=${category.name}")
+        CrashReporter.log("CaptureViewModel: submitting report category=${category.name} mediaType=${state.mediaType.name}")
         val result = reportRepository.submitReport(report, photoFile)
         if (result.isSuccess) {
             CrashReporter.log("CaptureViewModel: report submitted successfully")
             _uiState.update { it.copy(stage = CaptureStage.SUBMITTED) }
             val submittedId = result.getOrNull()?.id
-            if (!submittedId.isNullOrBlank()) {
-                aiReviewCoordinator.reviewInBackground(
-                    appScope = appScope,
-                    reportId = submittedId,
-                    photoUri = Uri.fromFile(photoFile),
-                    userSelectedCategory = category,
-                )
+            // Video reports never get AI classification (see submit()'s manual-category
+            // requirement) - no point enqueuing a worker whose Uri points at a video file the
+            // photo-only classifiers can't decode.
+            if (!isVideo && !submittedId.isNullOrBlank() && photoFile != null) {
+                enqueueClassificationWork(submittedId, photoFile, category)
             }
         } else {
             result.exceptionOrNull()?.let {
@@ -230,7 +279,10 @@ class CaptureViewModel @Inject constructor(
                 userId = userId,
                 category = category.name,
                 customLabel = report.customLabel,
-                localPhotoPath = photoFile.absolutePath,
+                localPhotoPath = photoFile?.absolutePath.orEmpty(),
+                mediaType = state.mediaType.name,
+                localVideoPath = videoFile?.absolutePath.orEmpty(),
+                isAnonymous = state.isAnonymous,
                 latitude = state.latitude,
                 longitude = state.longitude,
                 address = state.address,
@@ -243,6 +295,26 @@ class CaptureViewModel @Inject constructor(
             pendingReportDao.insert(entity)
             _uiState.update { it.copy(stage = CaptureStage.SUBMITTED, wasQueuedOffline = true) }
         }
+    }
+
+    // Enqueues classification as a WorkManager job rather than calling AiReviewCoordinator
+    // directly on appScope - a plain coroutine dies if the app process is killed right after
+    // submit (user swipes the app away), while a WorkManager job is durable: it survives process
+    // death and even a device reboot, and only runs once NetworkType.CONNECTED is satisfied
+    // (classification needs the LAN AI server or, at minimum, an on-device ML Kit run that still
+    // benefits from not fighting for CPU/network while the device is offline anyway).
+    private fun enqueueClassificationWork(reportId: String, photoFile: File, userSelectedCategory: ReportCategory) {
+        val request = OneTimeWorkRequestBuilder<ClassificationWorker>()
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .setInputData(
+                Data.Builder()
+                    .putString(ClassificationWorker.KEY_REPORT_ID, reportId)
+                    .putString(ClassificationWorker.KEY_PHOTO_URI, Uri.fromFile(photoFile).toString())
+                    .putString(ClassificationWorker.KEY_USER_SELECTED_CATEGORY, userSelectedCategory.name)
+                    .build(),
+            )
+            .build()
+        workManager.enqueue(request)
     }
 
     fun reset() {

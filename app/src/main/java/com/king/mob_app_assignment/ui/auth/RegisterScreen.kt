@@ -64,6 +64,19 @@ fun RegisterScreen(
             )
 
             OutlinedTextField(
+                value = uiState.username,
+                onValueChange = viewModel::onUsernameChange,
+                label = { Text("Username") },
+                singleLine = true,
+                isError = uiState.usernameError != null,
+                supportingText = { Text(uiState.usernameError ?: "Letters, numbers, and underscores only - used to sign in instead of your email.") },
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+            )
+
+            OutlinedTextField(
                 value = uiState.email,
                 onValueChange = viewModel::onEmailChange,
                 label = { Text(stringResource(R.string.register_email_label)) },

@@ -23,6 +23,8 @@ import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SwapVert
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AssistChip
@@ -42,9 +44,11 @@ import androidx.compose.ui.unit.dp
 import com.king.mob_app_assignment.domain.model.Department
 import com.king.mob_app_assignment.domain.model.Report
 import com.king.mob_app_assignment.domain.model.ReportCategory
+import com.king.mob_app_assignment.domain.model.ReportMediaType
 import com.king.mob_app_assignment.domain.model.ReportPriority
 import com.king.mob_app_assignment.domain.model.ReportStatus
 import com.king.mob_app_assignment.domain.model.displayLabel
+import com.king.mob_app_assignment.domain.model.reportReferenceCode
 import com.king.mob_app_assignment.ui.components.CategoryChip
 import com.king.mob_app_assignment.ui.components.StatusBadge
 import androidx.compose.foundation.shape.CircleShape
@@ -322,6 +326,11 @@ fun ReportListItem(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(text = report.categoryDisplayText(), style = MaterialTheme.typography.titleMedium)
                     Text(
+                        text = reportReferenceCode(report.id),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(
                         text = report.address.ifBlank { "${report.latitude}, ${report.longitude}" },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -334,6 +343,22 @@ fun ReportListItem(
                     Spacer(modifier = Modifier.height(6.dp))
                     Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                         StatusBadge(status = report.status)
+                        if (report.mediaType == ReportMediaType.VIDEO) {
+                            Icon(
+                                imageVector = Icons.Filled.Videocam,
+                                contentDescription = "Video report",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp).padding(start = 8.dp),
+                            )
+                        }
+                        if (report.isAnonymous) {
+                            Icon(
+                                imageVector = Icons.Filled.VisibilityOff,
+                                contentDescription = "Anonymous report",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp).padding(start = 8.dp),
+                            )
+                        }
                         if (report.needsAiReview) {
                             Icon(
                                 imageVector = Icons.Filled.Warning,

@@ -5,6 +5,7 @@
     <string name="nav_my_reports">Mis informes</string>
     <string name="nav_profile">Perfil</string>
     <string name="nav_admin">Administración</string>
+    <string name="nav_admin_dashboard">Panel</string>
 
     <!-- Auth: shared brand header -->
     <string name="auth_app_title">Shake to Report</string>

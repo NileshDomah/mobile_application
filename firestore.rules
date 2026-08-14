@@ -14,16 +14,41 @@ service cloud.firestore {
 
     match /users/{userId} {
       allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
-      allow create: if isSignedIn() && request.auth.uid == userId;
+      // Role is forced to CITIZEN on account creation, server-side - previously this only
+      // checked the uid match, which meant a client could in principle set()
+      // its own user doc with role: "ADMIN" on first write and the rule would have allowed it
+      // (the app's own registration code never did this, but the rule itself didn't prevent it).
+      // Admin accounts are never self-service - they only ever come from an admin manually
+      // editing a user's role field directly in the Firestore console (see PLACEHOLDERS_TODO.csv).
+      allow create: if isSignedIn() && request.auth.uid == userId &&
+        request.resource.data.role == 'CITIZEN';
       allow update: if isSignedIn() && request.auth.uid == userId &&
         request.resource.data.role == resource.data.role;
       allow delete: if false;
     }
 
     match /reports/{reportId} {
-      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow read: if isSignedIn() &&
-        (resource.data.userId == request.auth.uid || isAdmin());
+      // Anonymous reports (isAnonymous == true) store no owner at all - userId must be the
+      // empty string, and the create is authorized purely by isSignedIn() (the submitter still
+      // needs an account to use the app, that identity is just never attached to the document).
+      // A non-anonymous report still requires the normal owner-match.
+      allow create: if isSignedIn() &&
+        (
+          (request.resource.data.isAnonymous == true && request.resource.data.userId == '') ||
+          (request.resource.data.isAnonymous == false && request.resource.data.userId == request.auth.uid)
+        );
+      // All reports are readable by any signed-in citizen, not just the owner/admin - this is
+      // the actual intended design (the "All Reports" community tab, the map view, and upvoting
+      // all depend on browsing everyone's reports, not just your own). Found via a real
+      // PERMISSION_DENIED: getAllReports() queries the whole collection, and Firestore denies
+      // the ENTIRE query the moment even one returned document would fail a narrower per-doc
+      // read rule - a citizen-owner-only read rule was never actually compatible with a
+      // "browse all reports" list/map feature querying the full collection in one shot.
+      allow read: if isSignedIn();
+      // Anonymous reports (userId == "") can never match resource.data.userId ==
+      // request.auth.uid below, since a real Firebase Auth uid is never an empty string - so
+      // they're implicitly excluded from the owner-edit and owner-delete paths without needing
+      // an explicit isAnonymous check. Only isAdmin() or the upvote-only branch can touch them.
       // Admins keep full update rights (they update status via a separate path).
       // A non-admin owner may only edit their own report while it is still SUBMITTED, may not
       // change status themselves, and may only touch category/note/needsAiReview/

@@ -1,6 +1,7 @@
 package com.king.mob_app_assignment.util
 
 import android.content.Context
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -30,6 +31,8 @@ const val LANGUAGE_TAG_ENGLISH = "en"
 const val LANGUAGE_TAG_SPANISH = "es"
 const val LANGUAGE_TAG_FRENCH = "fr"
 
+private val BACKGROUND_SHAKE_ENABLED = booleanPreferencesKey("background_shake_enabled")
+
 @Singleton
 class ShakePreferences @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -51,6 +54,16 @@ class ShakePreferences @Inject constructor(
     suspend fun setLanguageTag(tag: String) {
         context.shakeDataStore.edit { prefs ->
             prefs[APP_LANGUAGE_TAG] = tag
+        }
+    }
+
+    val backgroundShakeEnabledFlow: Flow<Boolean> = context.shakeDataStore.data.map { prefs ->
+        prefs[BACKGROUND_SHAKE_ENABLED] ?: false
+    }
+
+    suspend fun setBackgroundShakeEnabled(enabled: Boolean) {
+        context.shakeDataStore.edit { prefs ->
+            prefs[BACKGROUND_SHAKE_ENABLED] = enabled
         }
     }
 }

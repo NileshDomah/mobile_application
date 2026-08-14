@@ -15,6 +15,8 @@ object Destinations {
     const val SETTINGS = "settings"
     const val PERMISSION_DASHBOARD = "permission_dashboard"
     const val ADMIN_REPORTS = "admin_reports"
+    const val ADMIN_DASHBOARD = "admin_dashboard"
+    const val CHAT = "chat"
 
     const val REPORT_DETAIL_ROUTE = "report_detail/{reportId}"
     fun reportDetail(reportId: String) = "report_detail/$reportId"

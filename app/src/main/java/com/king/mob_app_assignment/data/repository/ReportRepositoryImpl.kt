@@ -1,6 +1,8 @@
 package com.king.mob_app_assignment.data.repository
 
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentSnapshot
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Query
@@ -10,13 +12,17 @@ import com.king.mob_app_assignment.data.remote.FirestoreConstants
 import com.king.mob_app_assignment.domain.model.Department
 import com.king.mob_app_assignment.domain.model.Report
 import com.king.mob_app_assignment.domain.model.ReportCategory
+import com.king.mob_app_assignment.domain.model.ReportMediaType
 import com.king.mob_app_assignment.domain.model.ReportPriority
 import com.king.mob_app_assignment.domain.model.ReportStatus
+import com.king.mob_app_assignment.domain.model.StatusHistoryEntry
 import com.king.mob_app_assignment.util.ConnectivityObserver
 import com.king.mob_app_assignment.util.CrashReporter
 import com.king.mob_app_assignment.util.NotificationHelper
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
 import java.io.File
@@ -30,6 +36,7 @@ import kotlin.math.sqrt
 @Singleton
 class ReportRepositoryImpl @Inject constructor(
     private val firestore: FirebaseFirestore,
+    private val firebaseAuth: FirebaseAuth,
     private val pendingReportDao: PendingReportDao,
     private val connectivityObserver: ConnectivityObserver,
     private val notificationHelper: NotificationHelper,
@@ -39,11 +46,40 @@ class ReportRepositoryImpl @Inject constructor(
     private var statusListenerRegistration: ListenerRegistration? = null
     private val lastKnownStatusByReportId = mutableMapOf<String, String>()
 
+    private val _reportListErrors = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    override val reportListErrors: Flow<String> = _reportListErrors.asSharedFlow()
+
+    // Firestore reports a listener error on every snapshot after the underlying stream breaks,
+    // not just once - without this guard a single PERMISSION_DENIED would spam a new Snackbar
+    // on every recomposition/retry tick.
+    private var lastReportedErrorMessage: String? = null
+
+    private fun reportListenerError(source: String, error: Exception) {
+        CrashReporter.log("ReportRepositoryImpl.$source: snapshot listener error")
+        CrashReporter.recordException(error)
+        val message = "Couldn't load reports (${error.message ?: "unknown error"})"
+        if (message != lastReportedErrorMessage) {
+            lastReportedErrorMessage = message
+            _reportListErrors.tryEmit(message)
+        }
+    }
+
     override fun getAllReports(): Flow<List<Report>> = callbackFlow {
         val listener = reportsCollection
             .orderBy(FirestoreConstants.ReportFields.TIMESTAMP, Query.Direction.DESCENDING)
-            .addSnapshotListener { snapshot, _ ->
-                trySend(snapshot?.documents.orEmpty().mapNotNull { it.toReportOrNull() })
+            .addSnapshotListener { snapshot, error ->
+                // Firestore invokes this callback with snapshot == null on transient errors
+                // (a listen-stream restart, a brief network blip, etc), often immediately before
+                // delivering a fresh valid snapshot. Treating a null snapshot as "zero reports"
+                // caused the impact-stats count to flash from the real number down to 0 and back -
+                // so a transient error is logged and otherwise ignored rather than emitted as data.
+                if (error != null) {
+                    reportListenerError("getAllReports", error)
+                    return@addSnapshotListener
+                }
+                if (snapshot != null) {
+                    trySend(snapshot.documents.mapNotNull { it.toReportOrNull() })
+                }
             }
         awaitClose { listener.remove() }
     }
@@ -52,22 +88,41 @@ class ReportRepositoryImpl @Inject constructor(
         val listener = reportsCollection
             .whereEqualTo(FirestoreConstants.ReportFields.USER_ID, uid)
             .orderBy(FirestoreConstants.ReportFields.TIMESTAMP, Query.Direction.DESCENDING)
-            .addSnapshotListener { snapshot, _ ->
-                trySend(snapshot?.documents.orEmpty().mapNotNull { it.toReportOrNull() })
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    reportListenerError("getReportsForUser", error)
+                    return@addSnapshotListener
+                }
+                if (snapshot != null) {
+                    trySend(snapshot.documents.mapNotNull { it.toReportOrNull() })
+                }
             }
         awaitClose { listener.remove() }
     }
 
     override fun getReportById(id: String): Flow<Report?> = callbackFlow {
-        val listener = reportsCollection.document(id).addSnapshotListener { snapshot, _ ->
-            trySend(snapshot?.toReportOrNull())
+        val listener = reportsCollection.document(id).addSnapshotListener { snapshot, error ->
+            if (error != null) {
+                reportListenerError("getReportById", error)
+                return@addSnapshotListener
+            }
+            if (snapshot != null) {
+                trySend(snapshot.toReportOrNull())
+            }
         }
         awaitClose { listener.remove() }
     }
 
     override suspend fun updateReportStatus(id: String, status: ReportStatus): Result<Unit> = runCatching {
         reportsCollection.document(id)
-            .update(FirestoreConstants.ReportFields.STATUS, status.name)
+            .update(
+                mapOf(
+                    FirestoreConstants.ReportFields.STATUS to status.name,
+                    FirestoreConstants.ReportFields.STATUS_HISTORY to FieldValue.arrayUnion(
+                        statusHistoryEntryMap(status),
+                    ),
+                ),
+            )
             .await()
         Unit
     }
@@ -95,6 +150,9 @@ class ReportRepositoryImpl @Inject constructor(
         val updates = mutableMapOf<String, Any?>(
             FirestoreConstants.ReportFields.STATUS to status.name,
             FirestoreConstants.ReportFields.RESOLUTION_NOTE to note,
+            FirestoreConstants.ReportFields.STATUS_HISTORY to FieldValue.arrayUnion(
+                statusHistoryEntryMap(status, note),
+            ),
         )
         if (resolutionPhotoFile != null) {
             updates[FirestoreConstants.ReportFields.RESOLUTION_PHOTO_PATH] = resolutionPhotoFile.absolutePath
@@ -117,6 +175,20 @@ class ReportRepositoryImpl @Inject constructor(
     }
 
     override suspend fun deleteReport(id: String): Result<Unit> = runCatching {
+        // Diagnostic logging for the delete PERMISSION_DENIED investigation: log exactly what
+        // Firestore rules will actually evaluate against (owner uid + report's stored userId/
+        // status) so a failure can be root-caused from Logcat instead of guessing at the
+        // console's field values.
+        val currentUid = firebaseAuth.currentUser?.uid
+        runCatching {
+            val snapshot = reportsCollection.document(id).get().await()
+            CrashReporter.log(
+                "deleteReport: id=$id currentUid=$currentUid " +
+                    "storedUserId=${snapshot.getString(FirestoreConstants.ReportFields.USER_ID)} " +
+                    "storedStatus=${snapshot.getString(FirestoreConstants.ReportFields.STATUS)} " +
+                    "exists=${snapshot.exists()}",
+            )
+        }
         reportsCollection.document(id).delete().await()
         Unit
     }
@@ -134,15 +206,24 @@ class ReportRepositoryImpl @Inject constructor(
         Unit
     }
 
-    override suspend fun applyAiCategory(id: String, category: ReportCategory, customLabel: String): Result<Unit> = runCatching {
-        reportsCollection.document(id)
-            .update(
-                mapOf(
-                    FirestoreConstants.ReportFields.CATEGORY to category.name,
-                    FirestoreConstants.ReportFields.CUSTOM_LABEL to customLabel,
-                ),
-            )
-            .await()
+    override suspend fun applyAiCategory(
+        id: String,
+        category: ReportCategory,
+        customLabel: String,
+        priority: ReportPriority,
+    ): Result<Unit> = runCatching {
+        val updates = mutableMapOf<String, Any?>(
+            FirestoreConstants.ReportFields.CATEGORY to category.name,
+            FirestoreConstants.ReportFields.CUSTOM_LABEL to customLabel,
+        )
+        // Only overrides the admin-default NORMAL priority when the AI actually inferred
+        // something else - a NORMAL guess from the AI is indistinguishable from "unknown" (see
+        // CategorySuggestion.priority doc), so leaving the field untouched in that case avoids
+        // stamping every report with a falsely-confident "AI confirmed normal severity".
+        if (priority != ReportPriority.NORMAL) {
+            updates[FirestoreConstants.ReportFields.PRIORITY] = priority.name
+        }
+        reportsCollection.document(id).update(updates).await()
         Unit
     }
 
@@ -187,6 +268,9 @@ class ReportRepositoryImpl @Inject constructor(
                         category = report.category.name,
                         customLabel = report.customLabel,
                         localPhotoPath = photoFile?.absolutePath ?: report.localPhotoPath.orEmpty(),
+                        mediaType = report.mediaType.name,
+                        localVideoPath = report.localVideoPath.orEmpty(),
+                        isAnonymous = report.isAnonymous,
                         latitude = report.latitude,
                         longitude = report.longitude,
                         address = report.address,
@@ -210,9 +294,12 @@ class ReportRepositoryImpl @Inject constructor(
         for (entity in pending) {
             val report = Report(
                 userId = entity.userId,
+                isAnonymous = entity.isAnonymous,
                 category = ReportCategory.fromFirestoreValue(entity.category),
                 customLabel = entity.customLabel,
-                localPhotoPath = entity.localPhotoPath,
+                mediaType = if (entity.mediaType == ReportMediaType.VIDEO.name) ReportMediaType.VIDEO else ReportMediaType.PHOTO,
+                localPhotoPath = entity.localPhotoPath.ifBlank { null },
+                localVideoPath = entity.localVideoPath.ifBlank { null },
                 latitude = entity.latitude,
                 longitude = entity.longitude,
                 address = entity.address,
@@ -255,9 +342,9 @@ class ReportRepositoryImpl @Inject constructor(
         lastKnownStatusByReportId.clear()
         statusListenerRegistration = reportsCollection
             .whereEqualTo(FirestoreConstants.ReportFields.USER_ID, uid)
-            .addSnapshotListener { snapshot, _ ->
-                val documents = snapshot?.documents.orEmpty()
-                for (doc in documents) {
+            .addSnapshotListener { snapshot, error ->
+                if (error != null || snapshot == null) return@addSnapshotListener
+                for (doc in snapshot.documents) {
                     val report = doc.toReportOrNull() ?: continue
                     val previousStatus = lastKnownStatusByReportId[report.id]
                     val currentStatus = report.status.name
@@ -287,6 +374,9 @@ class ReportRepositoryImpl @Inject constructor(
         val toSave = report.copy(
             id = docRef.id,
             localPhotoPath = photoFile?.absolutePath ?: report.localPhotoPath,
+            statusHistory = report.statusHistory.ifEmpty {
+                listOf(StatusHistoryEntry(status = report.status, timestamp = report.timestamp))
+            },
         )
         try {
             docRef.set(toSave.toFirestoreMap()).await()
@@ -297,6 +387,12 @@ class ReportRepositoryImpl @Inject constructor(
         }
         toSave
     }
+
+    private fun statusHistoryEntryMap(status: ReportStatus, note: String = ""): Map<String, Any?> = mapOf(
+        FirestoreConstants.StatusHistoryEntryFields.STATUS to status.name,
+        FirestoreConstants.StatusHistoryEntryFields.TIMESTAMP to System.currentTimeMillis(),
+        FirestoreConstants.StatusHistoryEntryFields.NOTE to note,
+    )
 
     private fun haversineMeters(lat1: Double, lng1: Double, lat2: Double, lng2: Double): Double {
         val earthRadius = 6_371_000.0
@@ -316,6 +412,14 @@ class ReportRepositoryImpl @Inject constructor(
             category = ReportCategory.fromFirestoreValue(getString(FirestoreConstants.ReportFields.CATEGORY)),
             photoUrl = getString(FirestoreConstants.ReportFields.PHOTO_URL),
             localPhotoPath = getString(FirestoreConstants.ReportFields.LOCAL_PHOTO_PATH),
+            mediaType = if (getString(FirestoreConstants.ReportFields.MEDIA_TYPE) == ReportMediaType.VIDEO.name) {
+                ReportMediaType.VIDEO
+            } else {
+                ReportMediaType.PHOTO
+            },
+            localVideoPath = getString(FirestoreConstants.ReportFields.LOCAL_VIDEO_PATH),
+            videoUrl = getString(FirestoreConstants.ReportFields.VIDEO_URL),
+            isAnonymous = getBoolean(FirestoreConstants.ReportFields.IS_ANONYMOUS) ?: false,
             latitude = getDouble(FirestoreConstants.ReportFields.LATITUDE) ?: 0.0,
             longitude = getDouble(FirestoreConstants.ReportFields.LONGITUDE) ?: 0.0,
             address = getString(FirestoreConstants.ReportFields.ADDRESS).orEmpty(),
@@ -337,6 +441,18 @@ class ReportRepositoryImpl @Inject constructor(
             upvoteCount = (getLong(FirestoreConstants.ReportFields.UPVOTE_COUNT) ?: 0L).toInt(),
             upvotedByUids = (get(FirestoreConstants.ReportFields.UPVOTED_BY_UIDS) as? List<*>)
                 ?.filterIsInstance<String>() ?: emptyList(),
+            statusHistory = (get(FirestoreConstants.ReportFields.STATUS_HISTORY) as? List<*>)
+                ?.mapNotNull { entry ->
+                    val map = entry as? Map<*, *> ?: return@mapNotNull null
+                    StatusHistoryEntry(
+                        status = ReportStatus.fromFirestoreValue(
+                            map[FirestoreConstants.StatusHistoryEntryFields.STATUS] as? String,
+                        ),
+                        timestamp = (map[FirestoreConstants.StatusHistoryEntryFields.TIMESTAMP] as? Long) ?: 0L,
+                        note = (map[FirestoreConstants.StatusHistoryEntryFields.NOTE] as? String).orEmpty(),
+                    )
+                }
+                ?.sortedBy { it.timestamp } ?: emptyList(),
         )
     }
 
@@ -346,6 +462,10 @@ class ReportRepositoryImpl @Inject constructor(
         FirestoreConstants.ReportFields.CUSTOM_LABEL to customLabel,
         FirestoreConstants.ReportFields.PHOTO_URL to photoUrl,
         FirestoreConstants.ReportFields.LOCAL_PHOTO_PATH to localPhotoPath,
+        FirestoreConstants.ReportFields.MEDIA_TYPE to mediaType.name,
+        FirestoreConstants.ReportFields.LOCAL_VIDEO_PATH to localVideoPath,
+        FirestoreConstants.ReportFields.VIDEO_URL to videoUrl,
+        FirestoreConstants.ReportFields.IS_ANONYMOUS to isAnonymous,
         FirestoreConstants.ReportFields.LATITUDE to latitude,
         FirestoreConstants.ReportFields.LONGITUDE to longitude,
         FirestoreConstants.ReportFields.ADDRESS to address,
@@ -364,5 +484,12 @@ class ReportRepositoryImpl @Inject constructor(
         FirestoreConstants.ReportFields.RESOLUTION_PHOTO_PATH to resolutionPhotoPath,
         FirestoreConstants.ReportFields.UPVOTE_COUNT to upvoteCount,
         FirestoreConstants.ReportFields.UPVOTED_BY_UIDS to upvotedByUids,
+        FirestoreConstants.ReportFields.STATUS_HISTORY to statusHistory.map { entry ->
+            mapOf(
+                FirestoreConstants.StatusHistoryEntryFields.STATUS to entry.status.name,
+                FirestoreConstants.StatusHistoryEntryFields.TIMESTAMP to entry.timestamp,
+                FirestoreConstants.StatusHistoryEntryFields.NOTE to entry.note,
+            )
+        },
     )
 }

@@ -4,12 +4,31 @@ object FirestoreConstants {
 
     const val USERS_COLLECTION = "users"
     const val REPORTS_COLLECTION = "reports"
+    const val USERNAMES_COLLECTION = "usernames"
+    const val SUPPORT_MESSAGES_COLLECTION = "supportMessages"
 
     object UserFields {
         const val UID = "uid"
         const val EMAIL = "email"
         const val DISPLAY_NAME = "displayName"
+        const val USERNAME = "username"
         const val ROLE = "role"
+    }
+
+    /** Fields of a /usernames/{username} reservation doc - see AuthRepositoryImpl.register(). */
+    object UsernameFields {
+        const val UID = "uid"
+    }
+
+    object SupportMessageFields {
+        const val USER_ID = "userId"
+        const val USER_EMAIL = "userEmail"
+        const val USER_DISPLAY_NAME = "userDisplayName"
+        const val MESSAGE = "message"
+        const val RELATED_REPORT_ID = "relatedReportId"
+        const val STATUS = "status"
+        const val ADMIN_REPLY = "adminReply"
+        const val TIMESTAMP = "timestamp"
     }
 
     object ReportFields {
@@ -36,6 +55,18 @@ object FirestoreConstants {
         const val RESOLUTION_PHOTO_PATH = "resolutionPhotoPath"
         const val UPVOTE_COUNT = "upvoteCount"
         const val UPVOTED_BY_UIDS = "upvotedByUids"
+        const val STATUS_HISTORY = "statusHistory"
+        const val MEDIA_TYPE = "mediaType"
+        const val LOCAL_VIDEO_PATH = "localVideoPath"
+        const val VIDEO_URL = "videoUrl"
+        const val IS_ANONYMOUS = "isAnonymous"
+    }
+
+    /** Keys inside each map entry of [ReportFields.STATUS_HISTORY]. */
+    object StatusHistoryEntryFields {
+        const val STATUS = "status"
+        const val TIMESTAMP = "timestamp"
+        const val NOTE = "note"
     }
 
     object RoleValues {

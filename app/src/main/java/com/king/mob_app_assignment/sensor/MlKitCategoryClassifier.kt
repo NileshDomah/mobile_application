@@ -6,6 +6,7 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.label.ImageLabeling
 import com.google.mlkit.vision.label.defaults.ImageLabelerOptions
 import com.king.mob_app_assignment.domain.model.ReportCategory
+import com.king.mob_app_assignment.domain.model.ReportPriority
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.tasks.await
 import javax.inject.Inject
@@ -18,6 +19,11 @@ data class CategorySuggestion(
     // doesn't match any fixed category (e.g. "Fallen tree"). ML Kit's keyword-based classifier
     // never proposes CUSTOM (it has no way to generate free text), only VisionClassifierService does.
     val customLabel: String = "",
+    // Severity/urgency guess. Only VisionClassifierService (the Gemma vision LLM) can actually
+    // infer this from the photo's visual scale of damage - ML Kit's generic image labels carry
+    // no severity signal at all, so MlKitCategoryClassifier always returns NORMAL here. Treat a
+    // NORMAL priority from this field as "unknown", not "confirmed normal severity".
+    val priority: ReportPriority = ReportPriority.NORMAL,
 )
 
 @Singleton

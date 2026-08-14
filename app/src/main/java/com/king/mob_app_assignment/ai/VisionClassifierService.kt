@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Base64
 import com.king.mob_app_assignment.domain.model.ReportCategory
+import com.king.mob_app_assignment.domain.model.ReportPriority
 import com.king.mob_app_assignment.sensor.CategorySuggestion
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -41,7 +42,7 @@ class VisionClassifierService @Inject constructor(
         val requestJson = JSONObject().apply {
             put("model", VisionAiConfig.MODEL_ID)
             put("temperature", 0.0)
-            put("max_tokens", 20)
+            put("max_tokens", 40)
             put(
                 "messages",
                 JSONArray().put(
@@ -62,7 +63,12 @@ class VisionClassifierService @Inject constructor(
                                                 "line) that isn't covered by that list, reply instead with " +
                                                 "CUSTOM: followed by a short 2-5 word description, e.g. " +
                                                 "\"CUSTOM: Fallen tree blocking road\". Only use OTHER if you " +
-                                                "genuinely cannot tell what the issue is.",
+                                                "genuinely cannot tell what the issue is. On a new line, also " +
+                                                "reply with SEVERITY: followed by exactly one word - LOW, " +
+                                                "NORMAL, HIGH, or URGENT - based on how severe/dangerous the " +
+                                                "issue looks from the photo (e.g. a small crack is LOW, a " +
+                                                "large pothole or major leak is HIGH, anything posing an " +
+                                                "immediate safety risk is URGENT).",
                                         )
                                     },
                                 )
@@ -112,18 +118,35 @@ class VisionClassifierService @Inject constructor(
 
         if (rawContent.isBlank()) return null
 
+        val severity = Regex("SEVERITY:\\s*(\\w+)", RegexOption.IGNORE_CASE).find(rawContent)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.let { ReportPriority.fromFirestoreValue(it) }
+            ?: ReportPriority.NORMAL
+
         val customMatch = Regex("CUSTOM:\\s*(.+)", RegexOption.IGNORE_CASE).find(rawContent)
         if (customMatch != null) {
-            val label = customMatch.groupValues[1].trim().take(80)
+            // Strip a trailing "SEVERITY: ..." line if the model put both on the CUSTOM line
+            // rather than a genuinely separate line (Gemma is not perfectly consistent here).
+            val label = Regex("SEVERITY", RegexOption.IGNORE_CASE)
+                .split(customMatch.groupValues[1], limit = 2)
+                .first()
+                .trim()
+                .take(80)
             if (label.isNotBlank()) {
-                return CategorySuggestion(ReportCategory.CUSTOM, confidence = 0.75f, customLabel = label)
+                return CategorySuggestion(
+                    ReportCategory.CUSTOM,
+                    confidence = 0.75f,
+                    customLabel = label,
+                    priority = severity,
+                )
             }
         }
 
         val upperContent = rawContent.uppercase()
         val matched = ReportCategory.selectableEntries.firstOrNull { upperContent.contains(it.name) }
             ?: return null
-        return CategorySuggestion(matched, confidence = 0.85f)
+        return CategorySuggestion(matched, confidence = 0.85f, priority = severity)
     }
 
     private fun encodeImage(uri: Uri): String? = runCatching {

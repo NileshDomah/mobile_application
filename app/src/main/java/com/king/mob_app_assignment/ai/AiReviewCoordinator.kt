@@ -11,6 +11,15 @@ import javax.inject.Singleton
 
 private const val AGREEMENT_CONFIDENCE_THRESHOLD = 0.5f
 
+/**
+ * Outcome of a single classification attempt, used by [ClassificationWorker] to decide whether
+ * to retry or send the "classification failed, please choose manually" notification. Distinct
+ * from the confident-vs-flagged split inside [AiReviewCoordinator.review] - a report can be
+ * legitimately FLAGGED (AI ran fine but disagreed/was unsure) without that being a FAILURE (AI
+ * couldn't run at all - both the Gemma server and ML Kit threw).
+ */
+enum class AiReviewOutcome { AUTO_CATEGORIZED, CONFIRMED, FLAGGED, FAILED }
+
 // Runs AI category classification AFTER a report has already been submitted, on an
 // app-scoped CoroutineScope (passed in from MobAppAssignment) rather than a screen-scoped
 // ViewModel one - classification must survive the user navigating away from CaptureScreen,
@@ -30,29 +39,41 @@ class AiReviewCoordinator @Inject constructor(
     private val reportRepository: ReportRepository,
 ) {
     fun reviewInBackground(appScope: CoroutineScope, reportId: String, photoUri: Uri, userSelectedCategory: ReportCategory) {
-        appScope.launch {
-            CrashReporter.log("AiReviewCoordinator: reviewing report $reportId in background")
-            val suggestion = runCatching { categoryClassifier.classify(photoUri) }.getOrNull()
-            val confidentCategory = suggestion?.takeIf { it.confidence >= AGREEMENT_CONFIDENCE_THRESHOLD }?.category
+        appScope.launch { review(reportId, photoUri, userSelectedCategory) }
+    }
 
-            if (userSelectedCategory == ReportCategory.UNCATEGORIZED) {
-                if (confidentCategory != null) {
-                    reportRepository.applyAiCategory(reportId, confidentCategory, suggestion.customLabel)
-                    CrashReporter.log("AiReviewCoordinator: report $reportId auto-categorized as ${confidentCategory.name}")
-                } else {
-                    reportRepository.flagForAiReview(reportId, suggestion?.category, suggestion?.customLabel.orEmpty())
-                    CrashReporter.log("AiReviewCoordinator: report $reportId left uncategorized, flagged for review")
-                }
-                return@launch
-            }
+    // Suspends until classification (and the resulting Firestore write) completes, and reports
+    // what happened via AiReviewOutcome - used by ClassificationWorker, which needs a real
+    // result to decide retry vs. give-up vs. "notify the user classification failed".
+    suspend fun review(reportId: String, photoUri: Uri, userSelectedCategory: ReportCategory): AiReviewOutcome {
+        CrashReporter.log("AiReviewCoordinator: reviewing report $reportId")
+        val suggestion = runCatching { categoryClassifier.classify(photoUri) }.getOrNull()
+        if (suggestion == null) {
+            CrashReporter.log("AiReviewCoordinator: report $reportId - both classifiers failed")
+            return AiReviewOutcome.FAILED
+        }
+        val confidentCategory = suggestion.takeIf { it.confidence >= AGREEMENT_CONFIDENCE_THRESHOLD }?.category
 
-            val disagreesOrUnsure = confidentCategory == null || confidentCategory != userSelectedCategory
-            if (disagreesOrUnsure) {
-                reportRepository.flagForAiReview(reportId, suggestion?.category, suggestion?.customLabel.orEmpty())
-                CrashReporter.log("AiReviewCoordinator: report $reportId flagged for review")
+        if (userSelectedCategory == ReportCategory.UNCATEGORIZED) {
+            return if (confidentCategory != null) {
+                reportRepository.applyAiCategory(reportId, confidentCategory, suggestion.customLabel, suggestion.priority)
+                CrashReporter.log("AiReviewCoordinator: report $reportId auto-categorized as ${confidentCategory.name}")
+                AiReviewOutcome.AUTO_CATEGORIZED
             } else {
-                CrashReporter.log("AiReviewCoordinator: report $reportId confirmed by AI, no action")
+                reportRepository.flagForAiReview(reportId, suggestion.category, suggestion.customLabel)
+                CrashReporter.log("AiReviewCoordinator: report $reportId left uncategorized, flagged for review")
+                AiReviewOutcome.FLAGGED
             }
+        }
+
+        val disagreesOrUnsure = confidentCategory == null || confidentCategory != userSelectedCategory
+        return if (disagreesOrUnsure) {
+            reportRepository.flagForAiReview(reportId, suggestion.category, suggestion.customLabel)
+            CrashReporter.log("AiReviewCoordinator: report $reportId flagged for review")
+            AiReviewOutcome.FLAGGED
+        } else {
+            CrashReporter.log("AiReviewCoordinator: report $reportId confirmed by AI, no action")
+            AiReviewOutcome.CONFIRMED
         }
     }
 }

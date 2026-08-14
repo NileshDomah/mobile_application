@@ -33,6 +33,7 @@ data class ReportDetailUiState(
     val isSaving: Boolean = false,
     val isDeleted: Boolean = false,
     val isUpdatingStatus: Boolean = false,
+    val deleteErrorMessage: String? = null,
 )
 
 @HiltViewModel
@@ -59,6 +60,7 @@ class ReportDetailViewModel @Inject constructor(
         val isSaving: Boolean = false,
         val isDeleted: Boolean = false,
         val isUpdatingStatus: Boolean = false,
+        val deleteErrorMessage: String? = null,
     )
 
     val uiState: StateFlow<ReportDetailUiState> = combine(
@@ -77,6 +79,7 @@ class ReportDetailViewModel @Inject constructor(
             isSaving = editState.isSaving,
             isDeleted = editState.isDeleted,
             isUpdatingStatus = editState.isUpdatingStatus,
+            deleteErrorMessage = editState.deleteErrorMessage,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ReportDetailUiState())
 
@@ -140,9 +143,23 @@ class ReportDetailViewModel @Inject constructor(
     fun deleteReport() {
         viewModelScope.launch {
             val result = reportRepository.deleteReport(reportId)
-            if (result.isSuccess) {
-                editStateFlow.value = editStateFlow.value.copy(isDeleted = true)
+            editStateFlow.value = if (result.isSuccess) {
+                editStateFlow.value.copy(isDeleted = true, deleteErrorMessage = null)
+            } else {
+                // Previously swallowed silently on failure - the dialog would close and the
+                // screen would just redraw with the report still present, which looked like
+                // "it disappears then reappears" with zero explanation of why. Now surfaces the
+                // actual failure reason (most likely: Firestore rules rejected it - e.g. the
+                // report is no longer SUBMITTED, or the rules deployed to the real project are
+                // stale relative to this build - or a genuine network error).
+                editStateFlow.value.copy(
+                    deleteErrorMessage = result.exceptionOrNull()?.message ?: "Delete failed - please try again",
+                )
             }
         }
+    }
+
+    fun dismissDeleteError() {
+        editStateFlow.value = editStateFlow.value.copy(deleteErrorMessage = null)
     }
 }

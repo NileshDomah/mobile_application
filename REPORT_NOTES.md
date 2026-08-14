@@ -1929,3 +1929,664 @@ and Admin Workflow phases (which already added `department`, `priority`, `resolu
   `syncPendingReports()` both carry it through so an offline-queued custom report doesn't lose its
   label once it eventually syncs.
 - Verified with `compileDebugKotlin` (BUILD SUCCESSFUL).
+
+---
+
+## 2026-08-06 — Fixed "report count flashes to correct number, then drops to 0" bug
+
+- **Bug report**: user observed the impact-stats "Reports Filed" count briefly show the correct
+  number (e.g. 3) and then flash back to 0, rather than staying at 0 permanently as in the earlier
+  offline-queue bug (already fixed in a prior session).
+- **Investigation**: initial Logcat capture showed a `UnknownHostException` resolving
+  `firestore.googleapis.com` - a transient DNS/network blip - which was the clue. The user
+  confirmed their device had a normal working connection at the time, so this pointed at how the
+  app *handles* a brief connectivity hiccup, not a persistent outage.
+- **Root cause**: every Firestore `addSnapshotListener { snapshot, error -> ... }` callback in
+  `ReportRepositoryImpl` (`getAllReports`, `getReportsForUser`, `getReportById`, and
+  `startStatusChangeListener`) discarded the `error` parameter entirely and wrote
+  `snapshot?.documents.orEmpty()` - treating a `null` snapshot exactly the same as "the collection
+  has zero documents." Firestore's real behavior: it invokes this callback with `snapshot = null`
+  on **transient errors** (a listen-stream reconnect after a network blip, exactly like the one
+  visible in Logcat), typically followed almost immediately by a fresh, correct snapshot once the
+  stream recovers. So a one-second network hiccup was being visibly rendered as "you have 0
+  reports" before self-correcting a moment later - the exact flash-to-0-then-back behavior
+  reported.
+- **Fix**: all four listeners now branch on `error != null` first (logging + recording via
+  `CrashReporter`, then returning without emitting anything - leaving whatever the last good state
+  was untouched) and only call `trySend`/process documents when `snapshot` is genuinely non-null.
+  This is safe because Firestore never represents a real empty result set as `snapshot == null` -
+  a query matching zero documents still delivers a valid `QuerySnapshot` with an empty
+  `documents` list, which continues to correctly produce a `0` count. Only the error case (where
+  `snapshot` really is `null`) changes behavior, from "silently render as empty" to "log and wait
+  for the stream to recover."
+- **Report framing**: a strong example for Section 5.6 (Testing) - a bug that was only reproducible
+  under real transient network conditions on a physical device, not something a compile check or
+  even a stable-network manual test would have caught; and for Section 5.4 (Security/reliability)
+  as a concrete case of "don't conflate absence of data with an error state."
+- Verified with `compileDebugKotlin` (BUILD SUCCESSFUL). Best confirmed on-device by watching the
+  stat count during a brief real network interruption (e.g. toggling airplane mode on/off) and
+  observing it hold its last known value instead of dropping to 0 before recovering.
+
+## 2026-08-05/06 - Language switch fix, background shake detection, delete-permission diagnostic logging
+
+### Language switching bug - real root cause
+- Symptom: changing language in Settings never actually changed app language, even after
+  an earlier "fix" that added a manual `SharedFlow` + `activity.recreate()` workaround.
+- Real root cause: `MainActivity` extended plain `ComponentActivity`. `AppCompatDelegate
+  .setApplicationLocales()` is designed to auto-recreate the *Activity* it's called from, but
+  only correctly integrates with `AppCompatActivity` - on a `ComponentActivity` the locale change
+  either doesn't propagate to resource resolution at all, or the manual recreate races the
+  framework's own internal locale-change handling.
+- Fix: changed `MainActivity` to extend `AppCompatActivity`. Removed all the manual recreate
+  plumbing (`recreateActivityEvents` SharedFlow in SettingsViewModel, its collection in
+  MainActivity) since AppCompat now handles Activity recreation itself, correctly preserving
+  nav/back-stack state.
+- Report point: good example of "the first fix treated the symptom, not the cause" - worth a
+  paragraph in the report's testing/debugging section. The manual recreate() *looked* like it
+  should work (it does force a UI refresh) but silently didn't actually reload resources with
+  the new locale because ComponentActivity was never told about the locale in the first place.
+
+### Background shake detection (shake works even when app is closed)
+- User's explicit ask: shake should be detected even when the app isn't open, and the app should
+  require a background permission to do this - not just silently listen forever.
+- Architecture: a foreground `Service` (`ShakeBackgroundService`) that the user must explicitly
+  opt into via a Settings toggle. Reuses the exact same `@Singleton ShakeDetector` class the
+  foreground UI uses - no duplicated shake-detection logic, so the sensitivity fix from the
+  earlier shake-reliability bug automatically applies here too.
+- Required a persistent (low-priority, IMPORTANCE_LOW) notification while active - this is an
+  Android platform requirement for any foreground service, not a design choice; it's also good
+  UX transparency (user always knows the app is listening).
+- Uses `android:foregroundServiceType="specialUse"` (the API 34+ foreground service type model) +
+  the mandatory `PROPERTY_SPECIAL_USE_FGS_SUBTYPE` manifest property describing *why* the service
+  needs to run continuously in the background - Play Store review requires this justification
+  string for FGS type "specialUse".
+- Requires POST_NOTIFICATIONS runtime permission (Android 13+) before the toggle can be enabled -
+  gated behind the existing `PermissionManager`/`AppPermission` abstraction, requested via
+  `ActivityResultContracts.RequestPermission()` only when the user turns the toggle on (not
+  eagerly on app start) - this is good practice per Android's runtime-permission guidelines
+  (request in context, not preemptively) and is worth citing in the report's security/permissions
+  section.
+- On shake while backgrounded: service launches `MainActivity` with
+  `EXTRA_LAUNCH_CAPTURE=true`, which navigates straight to the Capture screen once the user is
+  authenticated - avoids forcing the user to manually reopen and navigate the app after a
+  background shake.
+- Toggle state persisted via DataStore (`ShakePreferences.backgroundShakeEnabledFlow`), so the
+  service is not restarted automatically on device boot (would need a BOOT_COMPLETED receiver
+  for that, deliberately not added - out of scope, flagged in PLACEHOLDERS_TODO.csv since a
+  restart currently loses the background-listening state and needs the user to re-toggle it).
+
+### Delete "PERMISSION_DENIED" - still unresolved, added diagnostic logging
+- User confirmed the exact firestore.rules shown in-chat were published to the Firebase console,
+  then got a genuine `PERMISSION_DENIED: missing or insufficient permissions` error trying to
+  delete their own SUBMITTED report - which the rules, read literally, should allow.
+- The rules logic itself was re-verified line by line and is correct: delete requires
+  `resource.data.userId == request.auth.uid && resource.data.status == 'SUBMITTED'`, and the
+  Kotlin model stores status as the literal uppercase enum name string ("SUBMITTED") and the
+  field name is `userId` in both the rule and `FirestoreConstants.ReportFields.USER_ID` - no
+  naming/casing mismatch found in the code.
+- Rather than guess further, added targeted diagnostic logging directly in
+  `ReportRepositoryImpl.deleteReport()`: before attempting the delete, it re-fetches the document
+  and logs (via `CrashReporter.log`, visible in Logcat/Crashlytics breadcrumbs) the signed-in
+  uid, the document's stored `userId`, stored `status`, and whether the doc exists - so the next
+  real failure gives exact facts instead of requiring a console lookup.
+- Suspected causes still on the table, in likely order: (1) rules published to a different
+  Firebase project than the one `google-services.json` points the app at (project id is
+  `mobile-app-dev-12761` - worth double-checking the console project switcher wasn't left on a
+  different project when publishing), (2) rules edited/republished but not the exact content
+  shown in chat (e.g. a stray autosaved draft), (3) Firestore's rules propagation delay (usually
+  under a minute, but has been known to take longer) meaning the test happened before the new
+  rules were actually live.
+- This remains the one open, unresolved bug from this session as of 2026-08-06.
+
+## 2026-08-10 - Professionalization pass: reference numbers, status timeline, error states
+
+User's direction: keep shake-to-report exactly as it is (no more focus/dev time there), and turn
+the app into a "professional reporting app" - specifically prioritizing trust/polish signals,
+with freedom to add whatever else fits that goal.
+
+### 1. Report reference numbers
+- Added `reportReferenceCode(reportId): String` (domain/model/ReportReference.kt) - derives a
+  short "RPT-XXXXXX" code from the existing Firestore document ID (first 6 alphanumeric chars,
+  uppercased). Purely presentational - no new Firestore field, no collision risk beyond the
+  underlying ID's own guarantees, since it's a deterministic slice of an ID that's already unique.
+- Displayed on: report detail screen (top, above the photo), every report list row (citizen +
+  admin lists), and in the status-change notification title.
+- Report point: this is the single cheapest "feels professional" change in the whole pass - real
+  service apps (couriers, ISPs, gov portals) always give you a short reference to quote in a
+  support conversation instead of a raw database ID or nothing at all.
+
+### 2. Status history / timeline
+- Added `StatusHistoryEntry(status, timestamp, note)` to the domain model and a new
+  `statusHistory: List<StatusHistoryEntry>` field on `Report`.
+- Stored in Firestore as `statusHistory: List<Map<String,Any?>>` (not a custom object - kept it
+  as plain maps for the same reason the rest of the schema does: no custom Firestore
+  serializer/deserializer registration needed, just symmetrical read/write map code already used
+  everywhere else in `ReportRepositoryImpl`).
+- Appended via `FieldValue.arrayUnion(...)` (not overwritten) from the two admin-only
+  status-changing writes: `updateReportStatus` and `resolveWithNote`. `arrayUnion` was chosen
+  specifically because it's an atomic server-side append - two concurrent admin actions can't
+  clobber each other's history entries the way a client-side read-modify-write of the whole array
+  could.
+- Seeded automatically at report creation with the initial SUBMITTED entry, so every report has
+  at least one entry from day one - no separate migration needed for new reports, and old reports
+  created before this feature shipped fall back gracefully (see below).
+- UI: new `StatusTimelineCard`/`StatusTimeline.kt` - a vertical dot-and-line timeline (each entry:
+  status label, formatted timestamp, and the resolution note if one was attached), rendered on
+  the report detail screen for both citizens and admins, below the location/heading/note card.
+  Falls back to synthesizing a single-entry list from `report.status`/`report.timestamp` when
+  `statusHistory` is empty - meaning reports that existed before this feature shipped still show
+  a sensible (if less detailed) timeline instead of a blank section or crash.
+- Report point: this is the kind of feature that's hard to bolt on cleanly after the fact if you
+  didn't plan for it - worth mentioning in the report's "design decisions" section that
+  `arrayUnion` + graceful-empty-fallback was chosen specifically to avoid a backfill migration
+  script for pre-existing data, which is out of scope for a coursework Firestore project (no
+  Cloud Functions available to run one server-side, and a client-side backfill would need every
+  existing report re-opened once by an admin).
+
+### 3. In-app status-change notifications - reference number added
+- `NotificationHelper.notifyStatusChanged` already existed from a previous session (works via the
+  existing Firestore snapshot-diff listener in `ReportRepositoryImpl.startStatusChangeListener`,
+  no FCM/server push infra needed since the user is always the one who owns the live listener).
+- Enhancement this pass: notification title now reads "Report update - RPT-XXXXXX" instead of the
+  generic "Report update", so a citizen with multiple reports in flight can tell at a glance which
+  one changed without opening the notification.
+
+### 4. Error states with retry
+- Added `ErrorState` composable (ui/components/ErrorState.kt), a deliberate visual match to the
+  existing `EmptyState` composable (same icon+title+message+centered layout) so the two read as a
+  matched pair of "nothing to show" states rather than one polished and one improvised.
+- Real error surfacing: previously, Firestore snapshot-listener errors (see the "report count
+  flashes to 0" bug fixed earlier this project) were logged to Crashlytics and otherwise silently
+  swallowed - a genuinely stuck error (e.g. PERMISSION_DENIED, which never self-resolves, unlike
+  the transient null-snapshot blips that motivated that earlier fix) left the UI looking like it
+  was just perpetually loading or empty, with no way for the user to know something was actually
+  wrong.
+- Added `ReportRepository.reportListErrors: Flow<String>` - a one-shot (no-replay) SharedFlow
+  emitted only from the listener error branch, deduplicated so a repeating stream of the same
+  underlying error doesn't spam repeated Snackbars. Deliberately NOT used to replace the list with
+  a full-screen error (the list keeps showing whatever it last successfully loaded, which is
+  friendlier than throwing away good cached data over a transient hiccup) - instead it drives a
+  dismissible Snackbar with a "Retry" action that re-triggers the existing pull-to-refresh
+  listener-resubscribe path already used by `ReportsListViewModel.refresh()`/
+  `AdminReportsViewModel.refresh()`.
+- Wired into both `ReportsListScreen` (citizen "My Reports"/"All Reports" tabs) and
+  `AdminReportsScreen`.
+- Report point: good illustration of "not every error should nuke the screen" - a Snackbar-with-
+  retry, non-destructive-to-existing-data pattern is the standard professional approach (Gmail,
+  banking apps, etc. all do this rather than blanking the screen on a network blip), worth citing
+  in the UX/error-handling section of the report.
+
+### Firestore rules - no change needed
+- `statusHistory` is only ever written by the two admin-only status-changing repository methods
+  (`updateReportStatus`, `resolveWithNote`), both already covered by the existing `isAdmin()`
+  branch of the update rule. The owner-only edit branch's `.hasOnly([...])` allowlist deliberately
+  was NOT extended to include `statusHistory`, since citizens never write it directly.
+
+## 2026-08-11 - Gallery picker added to capture flow
+
+User asked to confirm the "Report Issue" flow spec (camera auto-open, GPS/date-time/userId/address
+all automatic) - all of that already existed from prior sessions. The one gap: no way to pick an
+existing photo instead of taking a new one. Added gallery picker; deliberately did NOT add video
+capture (user's explicit choice when asked to scope this).
+
+- Camera still auto-opens exactly as before on entering the Capture screen (no regression to that
+  behavior - user explicitly confirmed keeping it).
+- New: if the user cancels/backs out of the camera intent instead of taking a photo, they now land
+  on a small chooser screen (`CaptureChooserStep` in CaptureScreen.kt) with a "Take photo" button
+  and a gallery icon beside it, rather than being dumped straight back out of the report flow.
+  This directly answers the user's phrasing ("camera open then in the side of the capture button
+  a gallery icon").
+- Gallery pick uses `ActivityResultContracts.PickVisualMedia` (the modern Android Photo Picker,
+  API 33+, with automatic fallback to the classic system picker on older devices) rather than a
+  raw storage-access intent - this means **no READ_MEDIA_IMAGES/READ_EXTERNAL_STORAGE runtime
+  permission is needed at all**, since the photo picker runs in a separate, sandboxed system
+  process and only ever hands the app a URI for the one item the user explicitly chose. Worth
+  citing in the report's permissions/security section as a deliberate least-privilege choice.
+- The picked image (a content:// Uri into the system media provider, not a File the app owns) is
+  copied byte-for-byte into the same app-private `report_photos/` directory used for camera
+  captures (`copyGalleryImageToReportFile`). This means a gallery-picked photo flows through the
+  exact same downstream pipeline as a camera photo with zero changes to CaptureViewModel - same
+  EXIF stripping, same local-only storage model, same AI classification path.
+
+## 2026-08-11 - AI classification: durable background execution, severity, de-emphasized manual picker
+
+User asked two things: (1) how to know if AI classification is actually accurate, and (2) make AI
+classification survive the app being fully closed, add severity detection, and notify the user if
+classification fails entirely so they know manual input is needed.
+
+### How to verify AI classification accuracy (answered, not yet built)
+There is currently no accuracy-tracking mechanism in the app - AI runs silently and only surfaces
+if it disagrees with the user (needsAiReview flag). To actually measure accuracy you'd need one of:
+(a) a manual test set - submit N photos of known categories, tally correct vs incorrect by hand;
+(b) compare AI's suggested category against the category a report ends up with after admin/citizen
+review (a natural "ground truth" signal that already exists in the data model, just not
+currently aggregated/displayed anywhere); (c) log every AI prediction alongside the eventual final
+category and compute a confusion matrix offline. None of this was built this pass - flagged as a
+good "future work" / limitations-section talking point for the report, and as a CSV row.
+
+### Background durability - WorkManager replaces appScope coroutine
+- Previously, AI classification ran via `AiReviewCoordinator.reviewInBackground()` on an
+  app-scoped `CoroutineScope` (`MobAppAssignment`'s `appScope`, backed by `SupervisorJob()`). This
+  keeps running after the user navigates away from the Capture screen, but **dies immediately if
+  the Android process itself is killed** (user swipes the app away from recents, OS low-memory
+  kill) - a plain in-process coroutine has no persistence.
+- Replaced with a WorkManager `ClassificationWorker` (`ai/ClassificationWorker.kt`), a
+  `@HiltWorker`/`CoroutineWorker` enqueued from `CaptureViewModel.doSubmit()` right after a
+  successful submit. WorkManager persists the job to its own SQLite-backed store and the OS
+  resumes it even after process death or a device reboot - this is the actual mechanism that makes
+  "classify even if the app is closed" true, not just "keeps running if the app happens to still
+  be alive in the background."
+- Enqueued with a `NetworkType.CONNECTED` constraint, so it doesn't even attempt to run while the
+  device is offline (no point burning a retry attempt when neither the LAN Gemma server nor a
+  meaningful network-dependent fallback path is reachable) - though notably ML Kit itself is
+  on-device and would technically work offline; the constraint is a deliberate simplification
+  documented as a CSV row rather than a bug.
+- Retries: WorkManager's own attempt counter (`runAttemptCount`) is used directly - up to 3
+  attempts, `Result.retry()` in between, `Result.failure()` (which triggers the failure
+  notification) only once attempts are exhausted. No custom backoff/retry-tracking code needed -
+  this is exactly the kind of reliability plumbing that's hard to hand-roll correctly and is the
+  main reason WorkManager was chosen over just wrapping the old coroutine in a try/retry loop.
+- Hilt integration required real infrastructure additions, not just a dependency bump: `WorkManager`
+  and `androidx.hilt:hilt-work` added to the version catalog/gradle; `MobAppAssignment` now
+  implements `Configuration.Provider` and supplies a `HiltWorkerFactory`-backed `Configuration`;
+  the manifest's default `androidx.startup` WorkManager initializer had to be explicitly removed
+  (`tools:node="remove"` on the `WorkManagerInitializer` meta-data) so our Hilt-aware
+  `Configuration` is the only one WorkManager ever sees - otherwise `@HiltWorker` classes crash at
+  runtime with "Unable to instantiate worker" since the default factory has no way to satisfy
+  their `@AssistedInject` dependencies.
+
+### Severity/priority now AI-suggested
+- `CategorySuggestion` (sensor/MlKitCategoryClassifier.kt) gained a `priority: ReportPriority`
+  field. Only the Gemma vision LLM path can actually produce a meaningful value - ML Kit's generic
+  image-label output carries no severity signal at all, so the ML Kit fallback always leaves it at
+  the default NORMAL, which is documented in-code as meaning "unknown," not "confirmed normal."
+- Extended the Gemma prompt (`VisionClassifierService.kt`) to ask for a second line -
+  `SEVERITY: LOW|NORMAL|HIGH|URGENT` - based on the visual scale of damage in the photo, alongside
+  the existing category classification. Bumped `max_tokens` from 20 to 40 to leave room for the
+  second line's tokens.
+- When the AI's category is confidently applied (the UNCATEGORIZED-report auto-categorize path in
+  `AiReviewCoordinator`), its severity guess is now also written to the report's `priority` field
+  - but again, only when the AI actually returned something other than NORMAL, to avoid silently
+  stamping every auto-categorized report with a falsely-confident "AI confirmed normal severity."
+  Reports flagged for review (the disagreement path) do NOT get an AI-set priority - severity
+  suggestions are only trusted enough to auto-apply on the same "AI is confident and user didn't
+  contest it" condition as the category itself.
+
+### Failure notification
+- `NotificationHelper.notifyClassificationFailed(reportId)` - fires only when `ClassificationWorker`
+  exhausts all 3 attempts without a usable result from either classifier (both the Gemma server
+  unreachable AND ML Kit itself throwing - a genuinely rare double-failure, e.g. total loss of
+  connectivity plus a corrupted photo file). Tells the user to open the report and choose a
+  category manually. Uses a separate notification-id space (`reportId.hashCode() + 1`) from the
+  existing status-changed notification so the two can never overwrite each other for the same
+  report.
+
+### Manual category picker de-emphasized (not removed)
+- User's concern: showing the category chip row always-visible on the submit form made it read as
+  a required step, even though AI is meant to be doing this automatically.
+- `FormStep`'s category section now defaults to a collapsed state: a single line of text ("Our AI
+  will detect the issue type automatically after you submit.") plus a small "Choose manually" text
+  button. Tapping it expands into the exact same chip row as before. This keeps manual override
+  fully available (per the user's explicit ask - "the option to choose category should still be
+  available") while visually communicating "optional" rather than "required." If the user had
+  already picked a category before this redesign (e.g. via state restoration), the section opens
+  pre-expanded rather than hiding their existing choice.
+
+## 2026-08-11 - Video reports, anonymous reporting, admin dashboard + "sign in as admin"
+
+Three sizeable features added in one pass, per explicit user direction on each.
+
+### Video reports
+- User's explicit choice: no AI video analysis at all - video reports require manual category
+  selection, full stop. This kept the whole feature far simpler than true video classification
+  (no multi-frame sampling, no extending the Gemma vision LLM call for video, no new model
+  capability needed at all).
+- New ReportMediaType enum (PHOTO/VIDEO) on Report, plus localVideoPath/videoUrl fields
+  mirroring the existing localPhotoPath/photoUrl device-local-only storage model (still no
+  Firebase Storage in this project - videos stay on-device just like photos always have).
+- Capture flow: the existing photo/gallery chooser (CaptureChooserStep) gained two more options
+  - "Record video" (ActivityResultContracts.CaptureVideo()) and a video gallery picker
+    (PickVisualMedia.VideoOnly) - both mirroring the exact copy-into-app-private-file pattern
+    already used for photos, so the rest of the pipeline (Room offline queue, Firestore write,
+    detail-screen rendering) needed only additive changes, not a rewrite.
+  - VideoPreviewStep is a deliberately simpler sibling of the existing photo PreviewStep - no
+    freehand annotation canvas, since drawing over a moving video doesn't make sense the way it
+    does over a still photo.
+  - CategorySection (the collapsible "AI will detect this" chooser from the previous session)
+    gained an isRequired mode specifically for video: the picker is always expanded and
+    required, with copy explicitly explaining "AI can't classify video."
+  - CaptureViewModel.submit() now validates category selection as mandatory when
+    mediaType == VIDEO, and doSubmit()/enqueueClassificationWork() skip WorkManager
+    classification entirely for video (there would be nothing for ClassificationWorker to
+    classify - both VisionClassifierService and MlKitCategoryClassifier only ever operate on
+    a single still image).
+  - Added Media3 ExoPlayer (androidx.media3:media3-exoplayer/media3-ui) - a new
+    VideoPlayer composable (ui/components/VideoPlayer.kt) wraps PlayerView via AndroidView,
+    reused identically on the capture preview and the report detail screen. Releases the player
+    in DisposableEffect so navigating away mid-playback doesn't leak a player instance.
+  - PendingReportEntity (the Room offline queue) also gained mediaType/localVideoPath
+    columns so a video report submitted while offline queues and syncs correctly instead of
+    silently losing its video on the next sync attempt.
+  - Report point: this is a clean example of "constrain the AI scope down to keep the feature
+    shippable" - true video AI classification (multi-frame sampling into the vision LLM) was
+    explicitly considered and rejected by the user in favor of "AI can't do this, ask the human"
+    - a legitimate, common real-world AI-product design decision, not a corner cut, worth framing
+    that way in the report's AI/design-decisions section.
+
+### Anonymous reporting
+- User's explicit choice: FULLY anonymous, not even visible to admins. Report.isAnonymous:
+  Boolean + userId stored as "" for anonymous reports - no owner is recorded anywhere.
+- Direct, acknowledged consequence (flagged to the user before building): an anonymous report
+  can never be edited or deleted by anyone afterward (there is no owner to authorize that), never
+  triggers a status-change notification (no uid to notify), and is excluded from the "my reports"
+  per-uid query by construction (empty userId never matches a real uid). The submit-screen toggle
+  UI states this tradeoff explicitly in its description text so the citizen isn't surprised later.
+- firestore.rules needed a real, deliberate loosening to support this: the create rule now
+  has two branches - isAnonymous == true AND userId == '' (empty string), or the normal
+  isAnonymous == false AND userId == request.auth.uid owner-match. The read rule similarly
+  allows any signed-in user to read a report where isAnonymous == true (there's no owner to
+  scope the read to). The submitter must still be signed in to use the app at all - "anonymous"
+  here means "no identity attached to the report document," not "no authentication required,"
+  which is what makes the rules change safe rather than opening the collection to arbitrary
+  unauthenticated writes.
+- The owner-only edit/delete rule branches needed NO explicit anonymous-exclusion clause: an
+  empty-string userId can never equal a real Firebase Auth uid, so anonymous reports are
+  automatically excluded from those branches by the existing uid-match logic. Documented this
+  explicitly in a rules comment so a future edit doesn't "helpfully" add a redundant (or
+  incorrectly permissive) check there.
+
+### Admin login + a real route guard (closing a rules gap found along the way)
+- User's request for the admin dashboard's access control turned into two related but distinct
+  pieces: (1) a "Sign in as admin" toggle on the login screen (2) making the admin routes
+  actually inaccessible to non-admins, not just hidden from the bottom nav.
+- Investigating (2) surfaced a real, if minor at this project's scale, security gap: the
+  /users/{userId} create rule only ever checked request.auth.uid == userId - it never
+  constrained the role field. In principle a client could set() their own user doc with
+  role: "ADMIN" on first write and the rule would have allowed it; the only reason this never
+  happened is that AuthRepositoryImpl.register() hardcodes CITIZEN client-side, which is
+  trusting well-behaved app code, not a server-side guarantee. Fixed by requiring
+  request.resource.data.role == 'CITIZEN' on create. Admin accounts remain exclusively
+  provisioned by manually editing a user's Firestore document in the console - there is
+  deliberately no self-service admin registration path anywhere in the app, by design.
+- "Sign in as admin" (LoginScreen's new FilterChip) is a UX affordance, not the actual
+  security boundary - the real check happens in LoginViewModel.login() after Firebase Auth
+  succeeds: if the toggle was on but the account's real Firestore role isn't ADMIN, the session
+  is immediately signed back out and an error shown, rather than silently dropping the user into
+  the ordinary citizen experience (which would look like a confusing bug, not a rejection).
+- Separately, added AdminRouteGuard in MainActivity.kt - a LaunchedEffect-based redirect
+  applied to both Destinations.ADMIN_REPORTS and the new Destinations.ADMIN_DASHBOARD routes.
+  Before this, admin screens were only ever kept out of a citizen's way by not showing the bottom
+  nav tab - a citizen who somehow deep-linked the raw route string would still have the composable
+  render (though any Firestore reads inside it would then fail server-side via isAdmin()). This
+  is genuine defense-in-depth: the server-side rule was always the real security boundary, this
+  guard just avoids rendering admin UI chrome to a non-admin who reaches the route by any means
+  other than the nav tap it's designed for.
+
+### Admin Dashboard screen
+- New tab (Destinations.ADMIN_DASHBOARD, gated by the same isAdmin check as the existing
+  admin-reports tab, plus the new route guard above), separate from the existing admin reports
+  list/workflow screen - a landing/overview page, not a replacement.
+- AdminDashboardViewModel reuses the exact same reportRepository.getAllReports() live flow
+  AdminReportsViewModel already subscribes to - all aggregation (counts by status/category/
+  department, total upvotes, the "needs attention" queue) is plain client-side groupingBy/
+  filter over that same data. No new repository method or Firestore aggregation query was
+  needed at this project's report volume; flagged in PLACEHOLDERS_TODO.csv as the place a real
+  deployment would want a server-side count() aggregation or Cloud Function instead, once report
+  volume grows past what a client-side listener can comfortably hold in memory.
+- "Needs attention" queue: reports that are unassigned (no department), URGENT priority, or
+  AI-flagged (needsAiReview) and not yet RESOLVED - capped at 20, sorted newest-first. Meant as
+  a fast triage entry point distinct from the full filterable admin-reports list.
+
+## 2026-08-11 (cont.) - Biometric (fingerprint/face) login
+
+User's explicit choice: standard Android BiometricPrompt (fingerprint and/or face, whichever the
+device has enrolled) rather than a custom in-app face-recognition model - this is how virtually
+every real app (banking, WhatsApp, etc) does it, and Android exposes both fingerprint and face
+unlock through one unified system dialog rather than the app needing to distinguish them. Scope:
+"the user can use email or biometrics" - biometrics is an alternative fast-path into an account
+that still fundamentally exists as a normal Firebase email/password account, not a replacement
+authentication scheme.
+
+### Why not just EncryptedSharedPreferences (what the project already had)
+The project already had SecurePrefsManager using EncryptedSharedPreferences (Android Keystore-
+backed AES256_GCM) for the remember-me email. That scheme protects data at rest, but nothing
+stops the app itself from decrypting it the instant it's read - there's no biometric gate on the
+decryption step itself, only on the file being unreadable to other apps/an attacker without root.
+For genuine "you must authenticate biometrically to unlock this credential," the credential's
+encryption key itself needs to require authentication to use.
+
+### BiometricCredentialStore - the real mechanism
+- New Android Keystore AES/GCM key generated with
+  KeyGenParameterSpec.Builder.setUserAuthenticationRequired(true). This is the actual
+  enforcement point: the Keystore/hardware itself refuses to unlock that specific key for
+  decryption until a fresh, successful BiometricPrompt authentication has just occurred - it is
+  not just app-level logic checking a boolean that could be bypassed by reading the app's private
+  storage directly (e.g. on a rooted device or via a backup exploit).
+- Flow: BiometricCredentialStore.buildDecryptCryptoObject() prepares a Cipher in DECRYPT_MODE
+  against that key and wraps it in a BiometricPrompt.CryptoObject; this is passed into
+  BiometricPrompt.authenticate(). The Cipher is only usable once BiometricPrompt's callback
+  reports success - LoginViewModel.onBiometricAuthSucceeded(cipher) then decrypts the stored
+  password and re-runs the exact same login() flow a manual entry would (so admin-role
+  verification, remember-me, etc. all apply identically - there is no separate/weaker biometric
+  login code path).
+- Password encryption (enable()) does NOT itself require a fresh biometric prompt - it runs
+  immediately after the user's own successful manual password login, while the plaintext
+  password is already in hand from that same login attempt, so prompting again would gain
+  nothing. Only decryption (i.e. actually using the stored credential to skip typing a password
+  next time) is gated.
+- Threat model note, documented in-code and in PLACEHOLDERS_TODO.csv: the decrypted password
+  still exists briefly in process memory, and is sent to Firebase Auth's sign-in call in
+  plaintext (over TLS) exactly as a manual login would - biometric-gated Keystore encryption
+  protects the credential at rest on the device, it doesn't change what Firebase Auth's own
+  sign-in API itself requires.
+
+### UX flow
+- Right after a successful manual login (and only if the device actually has biometric hardware
+  with an enrollment - checked via BiometricAuthManager.isAvailable(), a thin wrapper around
+  BiometricManager.canAuthenticate(BIOMETRIC_STRONG)), an AlertDialog offers "Enable biometric
+  sign-in?" - Enable / Not now. Never forced, never nagged again after "Not now" for that session
+  (no persistent re-prompt loop).
+- LoginScreen shows a "Sign in with biometrics" button only when both (a) a credential is
+  actually stored for this device AND (b) the device still reports biometric hardware/enrollment
+  available right now - covers the case where a user enabled it, then later removed all
+  fingerprints/face data in system settings; the button simply stops appearing rather than
+  crashing on a stale enabled flag.
+- Settings screen gained a "Biometric sign-in" toggle, but it is disable-only by design: turning
+  biometric login back ON requires the plaintext password, which Settings never has access to
+  (only the login flow does, right after a successful manual entry) - so the toggle only appears
+  once enabled, and switching it off just calls disable()/wipes the stored credential. Re-enabling
+  happens by logging in with a password again and accepting the offer dialog.
+- BIOMETRIC_STRONG (not BIOMETRIC_WEAK) is the only authenticator class requested -
+  BIOMETRIC_STRONG requires Android's Class 3 biometric certification (higher spoof-resistance
+  bar), appropriate for something that bypasses a password entirely rather than, say, just
+  re-confirming an already-unlocked session.
+
+## 2026-08-11 (cont.) - "My Reports" FAILED_PRECONDITION: missing composite index
+
+User reported a Firestore error on the reports list: "Couldn't load reports (FAILED_PRECONDITION:
+The query requires an index...)" with a console link to create it.
+
+### Root cause
+ReportRepositoryImpl.getReportsForUser(uid) - used by the "My Reports" tab - runs:
+  reportsCollection.whereEqualTo(USER_ID, uid).orderBy(TIMESTAMP, DESCENDING)
+Firestore requires a composite index any time a query combines an equality filter on one field
+with an orderBy on a DIFFERENT field (a single filter alone, or a single orderBy alone, is
+covered automatically - this specific combination is not). This query has existed since early in
+the project; it only surfaced as a visible error now because the required index was never
+created in this particular Firebase project (mobile-app-dev-12761) - a config/infra gap, not a
+code bug. The new Snackbar-based error surfacing added in an earlier session (see the
+"professionalization pass" notes) is exactly why this became visible to the user at all instead
+of silently logging to Crashlytics and showing an empty list - a good example of that earlier
+error-handling work paying off by surfacing a real, previously-invisible infra gap.
+
+### Second latent instance found while investigating
+findNearbyRecentReports(category, lat, lng, radiusMeters, withinMinutes) - the duplicate-report
+check run on every submission - combines whereEqualTo(CATEGORY) with
+whereGreaterThanOrEqualTo(TIMESTAMP), which also requires a composite index. This has not yet
+thrown the same error only because - by chance - every category+recency combination tested so
+far has happened to have zero matching prior reports, so the query never actually needed to
+execute against enough data to trip the missing-index check consistently, or it simply hasn't
+been hit yet in the exact tested account/category combination. Same root cause, same fix.
+
+### Fix
+- User clicked the exact create-index link from the error message (Firebase pre-fills the
+  index definition from the failed query) - this is the fastest path and requires no code change,
+  since the index is server-side database configuration, not application logic.
+- Added firestore.indexes.json + firebase.json to the repo so both required composite indexes
+  (userId+timestamp for getReportsForUser, category+timestamp for findNearbyRecentReports) are
+  documented and CLI-deployable (`firebase deploy --only firestore:indexes`) going forward,
+  rather than only ever existing as a manual console click-through with no record in the repo.
+- Report point: worth a paragraph in the report's testing/deployment section - Firestore's
+  required-index model is a real, non-obvious operational gotcha of NoSQL/document databases
+  that a relational-database-only background wouldn't anticipate (SQL databases don't require you
+  to pre-declare which multi-column queries you intend to run) - a good concrete example of a
+  platform-specific lesson learned during this project, not something a generic "add error
+  handling" answer would surface without actually hitting it.
+
+## 2026-08-11 (cont.) - PERMISSION_DENIED on "All Reports" - a real rules/feature design mismatch
+
+After fixing the composite-index issue, a second Firestore error surfaced: PERMISSION_DENIED on
+the "All Reports"/community tab (getAllReports(), which queries the entire reports collection
+with no per-uid filter).
+
+### Root cause
+The reports read rule was: `resource.data.isAnonymous == true || resource.data.userId ==
+request.auth.uid || isAdmin()` - i.e. a citizen could only read their OWN non-anonymous reports
+(plus any anonymous ones, plus admins could read everything). This was fine for "My Reports"
+(which filters server-side to the current uid) but structurally incompatible with the "All
+Reports" community tab and the map view - both call getAllReports(), which fetches the WHOLE
+collection with no filter. Firestore denies a query's ENTIRE result set the moment even a single
+document in it would fail the read rule for the requesting user - so as soon as the reports
+collection contained even one other citizen's non-anonymous report, every non-admin citizen's
+"All Reports" query started failing outright with PERMISSION_DENIED. This had likely gone
+unnoticed earlier in the project simply because there weren't yet multiple different citizen
+accounts' reports coexisting in the same test database.
+
+### Fix
+Confirmed with the user that "All Reports" is intentionally meant to let any citizen browse
+everyone's reports (this is the whole point of community visibility, upvoting, and the shared
+map view - not a bug to work around by restricting the feature instead). Changed the reports
+`allow read` rule to simply `isSignedIn()` - any authenticated user can read any report document.
+Write rules (create/update/delete) are unaffected and remain properly scoped to
+owner-while-SUBMITTED / admin / upvote-only, per the existing logic - this change only affects
+what can be READ, not what can be modified.
+
+### Debugging path (worth citing in the report's testing/methodology section)
+This was found by working backward from the real device error rather than guessing: opened
+Firestore Console → Data tab, inspected an actual report document's fields directly, confirmed
+the userId matched the signed-in account's real Auth UID (ruling out a data-corruption
+explanation), then asked which specific screen the user was on when the error occurred - "All
+Reports," not "My Reports" - which was the concrete fact that pinpointed a full-collection query
+hitting a narrower-than-intended read rule, rather than continuing to suspect the index, the
+rules deployment, or the account's role field (all of which had already been ruled out one at a
+time in this same investigation).
+
+## 2026-08-11 (cont.) - Map screen blank - missing MapView.onCreate() lifecycle call
+
+User reported the map screen showing a blank/gray canvas with no tiles, no error dialog.
+
+### Debugging path
+Verified each layer independently before touching code, working from Logcat rather than
+guessing:
+1. Confirmed the reports read rule fix (isSignedIn()) was already applied and published, so it
+   wasn't a stale-permissions issue resurfacing.
+2. Screenshot showed a distinct beige/tan color, not any app UI background color and not an
+   EmptyState message - ruled out "no reports to plot" (which would show EmptyState text) and
+   confirmed the AndroidView/MapView composable itself WAS being reached and had real size.
+3. Tested the Geoapify style URL directly with curl outside the app - HTTP 200, confirming the
+   API key is valid and not the rotated/revoked key PLACEHOLDERS_TODO.csv had flagged as a risk.
+4. Checked Logcat around the map's surface/EGL setup lines - zero Mbgl-Http/network log lines at
+   all, even seconds after the GL surface was created. This ruled out a network/auth failure
+   (which would at least log a failed request) and pointed to the map's style-load NEVER BEING
+   ATTEMPTED in the first place.
+
+### Root cause
+ReportsMapScreen.kt's MapView(ctx).apply { ... } block called getMapAsync { ... } directly,
+without first calling MapView.onCreate(savedInstanceState). MapLibre Native's documented
+lifecycle contract is onCreate -> onStart -> onResume -> ... -> onPause -> onStop -> onDestroy;
+onCreate() is what actually triggers native map/renderer creation on this MapLibre version
+(11.7.0). The existing code only wired onStart()/onResume() (via a DisposableEffect) and
+onPause()/onStop()/onDestroy() on disposal - onCreate() was missing entirely. Without it,
+getMapAsync's callback can silently never fire: the underlying GL SurfaceView still renders (its
+own idle clear-color background, which is exactly the distinct beige color observed - not an app
+background color, not a Mapbox/MapLibre "style failed to load" error tile), but setStyle() is
+never even called, so no network request for the style JSON is ever issued - matching the
+complete absence of Mbgl-Http log lines.
+
+### Fix
+Added mapView.onCreate(null) immediately after construction, before getMapAsync() is called -
+one line, in the factory lambda of the AndroidView in ReportsMapScreen.kt. This is a real,
+previously-uncaught lifecycle bug in the original MapLibre integration (from the OSMdroid ->
+MapLibre migration earlier in the project), not a new regression from any recent change - it
+simply had never been exercised end-to-end with actual report data on a real/emulated device
+before now (earlier sessions' map testing may have hit the "no reports to plot" empty state
+before ever reaching this code path, which would explain why this was never caught earlier).
+
+### Report point
+Good concrete example of Android's "it looks like it's working but a lifecycle callback was
+silently skipped" class of bug - the GL surface, EGL config, and MapLibre init all logged
+successfully and looked completely healthy, and only the total ABSENCE of a network log line
+(a negative signal, not a crash or error message) was the actual clue. Worth citing in the
+report's debugging-methodology section as an example of reasoning from what's missing in a log,
+not just what's present.
+
+## 2026-08-14 - In-app help chatbot, scoped to this app's own domain
+
+User's explicit requirement: a chatbot, but strictly scoped to app/issue-related questions only -
+not a general-purpose assistant. Also asked for it to be able to answer about the user's own
+reports, not just generic how-to questions.
+
+### Backend - reused the existing Gemma/LM Studio connection, no new AI infra
+- New ai/ChatMessageService.kt is a text-only sibling of the existing VisionClassifierService -
+  same OkHttpClient setup, same /v1/chat/completions request shape, same
+  choices[0].message.content response-parsing pattern, just without the image_url content part
+  and supporting a full multi-turn messages array instead of a single one-shot prompt.
+  Deliberately did NOT introduce a second AI provider/endpoint - this keeps the "AI backend" story
+  in the report singular and consistent, and inherits the same documented dev/testing-only LAN-
+  server caveat (VisionAiConfig.BASE_URL, PLACEHOLDERS_TODO.csv) rather than adding a new one.
+- Same graceful-fallback pattern as the classifier: sendMessage() returns null on any failure
+  (server unreachable, non-2xx, unparseable body) rather than throwing, and the ViewModel shows a
+  plain "assistant is unavailable right now" bubble instead of a raw error.
+
+### Scope enforcement - system prompt only, no keyword pre-filter
+- Chose the system-prompt approach over a separate topic-classification/keyword-filter pass, per
+  discussion: simpler, no extra infrastructure, and matches how real product chatbots (e.g.
+  in-app support widgets) scope themselves in practice.
+- The system prompt explicitly names the app, lists what it CAN help with (using the app,
+  reporting categories/statuses/priority, anonymous reporting, AI classification, and the user's
+  own reports), and instructs it to decline anything else in one sentence rather than attempting
+  to answer or lecture the user about why it's declining.
+- Acknowledged limitation (see PLACEHOLDERS_TODO.csv): this is prompt-based enforcement only - a
+  sufficiently adversarial user prompt could still get the underlying model to go off-topic
+  (classic prompt-injection risk). A production system would likely add a second guardrail layer
+  (e.g. a moderation/classification pass on the output, or a stricter fine-tuned model) - out of
+  scope for this coursework project, but worth naming explicitly as a known gap rather than
+  implying the scoping is airtight.
+
+### Real user-report context, built once per chat session
+- The system prompt is built lazily on the FIRST message the user sends (not eagerly when the
+  screen opens), and includes a summary of the signed-in user's own reports - reference code,
+  category, status, department, filed date, and resolution note if any - fetched via the
+  existing ReportRepository.getReportsForUser(uid), capped at the 5 most recent reports.
+- Built once per session, not per-message, so a report's status changing mid-conversation doesn't
+  silently rewrite the assistant's frame of reference under the user's feet - matches how a human
+  support agent would work from a snapshot of "here's what I can see about your account right now."
+- This is real report data going into an LLM prompt sent to a LAN server - acceptable for this
+  coursework project's LAN-only dev deployment, but flagged as a privacy consideration that would
+  need real handling (e.g. a properly hosted/audited API, explicit consent copy) before any real
+  deployment - added to PLACEHOLDERS_TODO.csv.
+
+### UI/UX
+- Floating help button (SmartToy icon) hoisted above mainGraph's NavHost in MainActivity's
+  RootNavGraph, NOT inside MainScaffold - this was deliberate: MainScaffold only wraps the 6
+  bottom-nav-tab screens (Home/Reports/MyReports/Profile/AdminReports/AdminDashboard), but
+  Capture/ReportDetail/Settings/PermissionDashboard render bare with no shared Scaffold. Hoisting
+  the FAB to the NavHost's own Box wrapper means it's genuinely available everywhere in the main
+  graph, including mid-capture-flow or while viewing a report detail - not just on the 4-5 tab
+  screens - matching the "accessible from key screens" requirement rather than only the bottom-nav
+  tabs.
+- Hidden on auth/onboarding (no signed-in user, no report context to draw on yet) and on the Chat
+  screen itself (no point floating a button to open the screen you're already on).
+- Chat UI: simple bubble list (user right-aligned/primary color, assistant left-aligned/
+  surfaceVariant, error messages in errorContainer), a typing indicator while waiting for a reply,
+  and an empty state with example questions shown before the first message is sent.
