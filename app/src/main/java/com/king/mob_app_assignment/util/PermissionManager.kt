@@ -38,12 +38,19 @@ object PermissionManager {
         ) == PackageManager.PERMISSION_GRANTED
     }
 
+    // See PermissionRequestHistory's own doc comment for the exact bug this fixes ("the allow
+    // option should pop up in the app instead of redirecting to phone settings") -
+    // shouldShowRequestPermissionRationale() alone can't tell "never asked yet" apart from
+    // "genuinely denied with don't-ask-again", both report false. Only treating that false as
+    // permanently denied once PermissionRequestHistory confirms a real request already happened
+    // means a brand-new install always gets the real system dialog first, not a Settings redirect.
     fun isPermanentlyDenied(activity: Activity, permission: AppPermission): Boolean {
         if (permission == AppPermission.NOTIFICATIONS && Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
             return false
         }
         val granted = isGranted(activity, permission)
         if (granted) return false
+        if (!PermissionRequestHistory.hasRequestedBefore(activity, permission)) return false
         return !activity.shouldShowRequestPermissionRationale(permission.manifestPermission)
     }
 

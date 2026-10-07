@@ -20,6 +20,13 @@ private const val AGREEMENT_CONFIDENCE_THRESHOLD = 0.5f
  */
 enum class AiReviewOutcome { AUTO_CATEGORIZED, CONFIRMED, FLAGGED, FAILED }
 
+// category is null only for AiReviewOutcome.FAILED (no classification result exists to report a
+// category for). For every other outcome it's the category the AI actually settled on - the
+// user's own pick for CONFIRMED/FLAGGED (FLAGGED still carries the classifier's own suggestion,
+// not the user's, since that's the more useful one to show in a "here's what we detected"
+// notification), or the newly-applied AI category for AUTO_CATEGORIZED.
+data class AiReviewResult(val outcome: AiReviewOutcome, val category: ReportCategory?)
+
 // Runs AI category classification AFTER a report has already been submitted, on an
 // app-scoped CoroutineScope (passed in from MobAppAssignment) rather than a screen-scoped
 // ViewModel one - classification must survive the user navigating away from CaptureScreen,
@@ -43,14 +50,14 @@ class AiReviewCoordinator @Inject constructor(
     }
 
     // Suspends until classification (and the resulting Firestore write) completes, and reports
-    // what happened via AiReviewOutcome - used by ClassificationWorker, which needs a real
-    // result to decide retry vs. give-up vs. "notify the user classification failed".
-    suspend fun review(reportId: String, photoUri: Uri, userSelectedCategory: ReportCategory): AiReviewOutcome {
+    // what happened via AiReviewResult - used by ClassificationWorker, which needs a real result
+    // to decide retry vs. give-up vs. which "classification succeeded/failed" notification to send.
+    suspend fun review(reportId: String, photoUri: Uri, userSelectedCategory: ReportCategory): AiReviewResult {
         CrashReporter.log("AiReviewCoordinator: reviewing report $reportId")
         val suggestion = runCatching { categoryClassifier.classify(photoUri) }.getOrNull()
         if (suggestion == null) {
             CrashReporter.log("AiReviewCoordinator: report $reportId - both classifiers failed")
-            return AiReviewOutcome.FAILED
+            return AiReviewResult(AiReviewOutcome.FAILED, category = null)
         }
         val confidentCategory = suggestion.takeIf { it.confidence >= AGREEMENT_CONFIDENCE_THRESHOLD }?.category
 
@@ -58,11 +65,11 @@ class AiReviewCoordinator @Inject constructor(
             return if (confidentCategory != null) {
                 reportRepository.applyAiCategory(reportId, confidentCategory, suggestion.customLabel, suggestion.priority)
                 CrashReporter.log("AiReviewCoordinator: report $reportId auto-categorized as ${confidentCategory.name}")
-                AiReviewOutcome.AUTO_CATEGORIZED
+                AiReviewResult(AiReviewOutcome.AUTO_CATEGORIZED, confidentCategory)
             } else {
                 reportRepository.flagForAiReview(reportId, suggestion.category, suggestion.customLabel)
                 CrashReporter.log("AiReviewCoordinator: report $reportId left uncategorized, flagged for review")
-                AiReviewOutcome.FLAGGED
+                AiReviewResult(AiReviewOutcome.FLAGGED, suggestion.category)
             }
         }
 
@@ -70,10 +77,10 @@ class AiReviewCoordinator @Inject constructor(
         return if (disagreesOrUnsure) {
             reportRepository.flagForAiReview(reportId, suggestion.category, suggestion.customLabel)
             CrashReporter.log("AiReviewCoordinator: report $reportId flagged for review")
-            AiReviewOutcome.FLAGGED
+            AiReviewResult(AiReviewOutcome.FLAGGED, suggestion.category)
         } else {
             CrashReporter.log("AiReviewCoordinator: report $reportId confirmed by AI, no action")
-            AiReviewOutcome.CONFIRMED
+            AiReviewResult(AiReviewOutcome.CONFIRMED, userSelectedCategory)
         }
     }
 }

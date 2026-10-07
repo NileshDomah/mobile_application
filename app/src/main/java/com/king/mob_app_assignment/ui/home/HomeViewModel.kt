@@ -8,6 +8,7 @@ import com.king.mob_app_assignment.data.repository.ReportRepository
 import com.king.mob_app_assignment.domain.model.ImpactStats
 import com.king.mob_app_assignment.domain.model.Report
 import com.king.mob_app_assignment.domain.model.toImpactStats
+import com.king.mob_app_assignment.util.ShakePreferences
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -16,6 +17,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 data class HomeUiState(
@@ -29,6 +31,7 @@ data class HomeUiState(
 class HomeViewModel @Inject constructor(
     private val reportRepository: ReportRepository,
     private val pendingReportDao: PendingReportDao,
+    private val shakePreferences: ShakePreferences,
     firebaseAuth: FirebaseAuth,
 ) : ViewModel() {
 
@@ -53,6 +56,19 @@ class HomeViewModel @Inject constructor(
             pendingSyncCount = pending.size,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), HomeUiState())
+
+    // Surfaced here too (in addition to Settings) per explicit request that "shake while the app
+    // is closed" be visible/accessible without digging into Settings - same underlying
+    // ShakePreferences flag SettingsScreen's own "Shake in background" switch reads/writes, so
+    // toggling it from either screen stays in sync with the other automatically.
+    val backgroundShakeEnabled: StateFlow<Boolean> = shakePreferences.backgroundShakeEnabledFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    fun setBackgroundShakeEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            shakePreferences.setBackgroundShakeEnabled(enabled)
+        }
+    }
 
     init {
         // Started here (rather than Application) since it needs the logged-in uid, and this is

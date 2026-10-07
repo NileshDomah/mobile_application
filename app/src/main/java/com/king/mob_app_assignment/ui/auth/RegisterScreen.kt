@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.king.mob_app_assignment.R
 import com.king.mob_app_assignment.ui.components.PrimaryActionButton
+import com.king.mob_app_assignment.ui.theme.translatedStringResource
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -48,14 +49,14 @@ fun RegisterScreen(
                 .verticalScroll(rememberScrollState()),
         ) {
             AuthBrandHeader(
-                title = stringResource(R.string.register_create_account),
-                subtitle = stringResource(R.string.register_subtitle),
+                title = translatedStringResource(R.string.register_create_account),
+                subtitle = translatedStringResource(R.string.register_subtitle),
             )
 
             OutlinedTextField(
                 value = uiState.displayName,
                 onValueChange = viewModel::onDisplayNameChange,
-                label = { Text(stringResource(R.string.register_display_name_label)) },
+                label = { Text(translatedStringResource(R.string.register_display_name_label)) },
                 singleLine = true,
                 isError = uiState.displayNameError != null,
                 supportingText = { uiState.displayNameError?.let { Text(it) } },
@@ -66,10 +67,10 @@ fun RegisterScreen(
             OutlinedTextField(
                 value = uiState.username,
                 onValueChange = viewModel::onUsernameChange,
-                label = { Text("Username") },
+                label = { Text(translatedStringResource(R.string.register_username_label)) },
                 singleLine = true,
                 isError = uiState.usernameError != null,
-                supportingText = { Text(uiState.usernameError ?: "Letters, numbers, and underscores only - used to sign in instead of your email.") },
+                supportingText = { Text(uiState.usernameError ?: translatedStringResource(R.string.register_username_helper)) },
                 shape = MaterialTheme.shapes.small,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -79,7 +80,7 @@ fun RegisterScreen(
             OutlinedTextField(
                 value = uiState.email,
                 onValueChange = viewModel::onEmailChange,
-                label = { Text(stringResource(R.string.register_email_label)) },
+                label = { Text(translatedStringResource(R.string.register_email_label)) },
                 singleLine = true,
                 isError = uiState.emailError != null,
                 supportingText = { uiState.emailError?.let { Text(it) } },
@@ -91,9 +92,23 @@ fun RegisterScreen(
             )
 
             OutlinedTextField(
+                value = uiState.phoneNumber,
+                onValueChange = viewModel::onPhoneNumberChange,
+                label = { Text(translatedStringResource(R.string.register_phone_number_label)) },
+                singleLine = true,
+                isError = uiState.phoneNumberError != null,
+                supportingText = { uiState.phoneNumberError?.let { Text(it) } },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+            )
+
+            OutlinedTextField(
                 value = uiState.password,
                 onValueChange = viewModel::onPasswordChange,
-                label = { Text(stringResource(R.string.register_password_label)) },
+                label = { Text(translatedStringResource(R.string.register_password_label)) },
                 singleLine = true,
                 isError = uiState.passwordError != null,
                 supportingText = { uiState.passwordError?.let { Text(it) } },
@@ -108,7 +123,7 @@ fun RegisterScreen(
             OutlinedTextField(
                 value = uiState.confirmPassword,
                 onValueChange = viewModel::onConfirmPasswordChange,
-                label = { Text(stringResource(R.string.register_confirm_password_label)) },
+                label = { Text(translatedStringResource(R.string.register_confirm_password_label)) },
                 singleLine = true,
                 isError = uiState.confirmPasswordError != null,
                 supportingText = { uiState.confirmPasswordError?.let { Text(it) } },
@@ -130,7 +145,7 @@ fun RegisterScreen(
             }
 
             PrimaryActionButton(
-                text = stringResource(R.string.register_button),
+                text = translatedStringResource(R.string.register_button),
                 onClick = viewModel::register,
                 isLoading = uiState.isLoading,
                 modifier = Modifier.padding(top = 20.dp),
@@ -142,7 +157,7 @@ fun RegisterScreen(
                     .fillMaxWidth()
                     .padding(top = 4.dp),
             ) {
-                Text(stringResource(R.string.register_login_prompt))
+                Text(translatedStringResource(R.string.register_login_prompt))
             }
         }
     }

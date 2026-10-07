@@ -17,11 +17,10 @@ enum class ChatRole { SYSTEM, USER, ASSISTANT }
 data class ChatMessage(val role: ChatRole, val content: String)
 
 /**
- * Text-only chat completion against the same LAN Gemma/LM Studio endpoint already used for photo
- * classification (VisionClassifierService) - reuses its exact OkHttp setup and
- * choices[0].message.content response-parsing pattern, just without the image_url content part.
- * Same dev/testing-only LAN-server caveat applies (see VisionAiConfig/PLACEHOLDERS_TODO.csv) -
- * this is not how a production build would reach its AI backend.
+ * Text-only chat completion against the same hosted OpenRouter endpoint already used for photo
+ * classification (VisionClassifierService, see VisionAiConfig) - reuses its exact OkHttp setup
+ * and choices[0].message.content response-parsing pattern, just without the image_url content
+ * part.
  */
 @Singleton
 class ChatMessageService @Inject constructor() {
@@ -62,6 +61,10 @@ class ChatMessageService @Inject constructor() {
             .url("${VisionAiConfig.BASE_URL}/v1/chat/completions")
             .apply {
                 VisionAiConfig.API_KEY?.let { key -> addHeader("Authorization", "Bearer $key") }
+                // OpenRouter-recommended (not strictly required) attribution headers - see
+                // VisionClassifierService's identical addition for why.
+                addHeader("HTTP-Referer", "https://github.com/king/mob-app-assignment")
+                addHeader("X-Title", "Shake to Report")
             }
             .post(requestJson.toString().toRequestBody("application/json".toMediaType()))
             .build()

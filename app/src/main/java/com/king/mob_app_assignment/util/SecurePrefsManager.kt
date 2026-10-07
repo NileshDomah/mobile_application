@@ -35,6 +35,17 @@ class SecurePrefsManager @Inject constructor(
         get() = prefs.getString(KEY_LAST_EMAIL, null)
         set(value) = prefs.edit().putString(KEY_LAST_EMAIL, value).apply()
 
+    // Permanent per-device opt-out from the post-login "enable biometric login?" prompt - set
+    // only when the user explicitly picks "Never" (as opposed to "Not now", which just leaves
+    // this false so the prompt asks again next successful login, matching the user's own
+    // explicit request: deny -> tell them Settings still has it -> never ask again OR ask again
+    // next time they open the app, their choice at decline time). Never cleared automatically -
+    // the only way back is the user turning biometric login on from Settings themselves, or a
+    // fresh install.
+    var hasDeclinedBiometricPromptPermanently: Boolean
+        get() = prefs.getBoolean(KEY_BIOMETRIC_PROMPT_DECLINED_PERMANENTLY, false)
+        set(value) = prefs.edit().putBoolean(KEY_BIOMETRIC_PROMPT_DECLINED_PERMANENTLY, value).apply()
+
     fun clear() {
         prefs.edit().remove(KEY_LAST_EMAIL).apply()
     }
@@ -43,5 +54,6 @@ class SecurePrefsManager @Inject constructor(
         const val PREFS_FILE_NAME = "secure_user_prefs"
         const val KEY_REMEMBER_ME = "remember_me"
         const val KEY_LAST_EMAIL = "last_used_email"
+        const val KEY_BIOMETRIC_PROMPT_DECLINED_PERMANENTLY = "biometric_prompt_declined_permanently"
     }
 }

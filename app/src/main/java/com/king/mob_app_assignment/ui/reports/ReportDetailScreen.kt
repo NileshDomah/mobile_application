@@ -4,6 +4,8 @@ import android.content.Context
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,8 +21,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Explore
@@ -52,11 +56,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
+import com.king.mob_app_assignment.R
 import com.king.mob_app_assignment.domain.model.Department
 import com.king.mob_app_assignment.domain.model.ReportCategory
 import com.king.mob_app_assignment.domain.model.ReportMediaType
@@ -66,16 +76,20 @@ import com.king.mob_app_assignment.domain.model.displayLabel
 import com.king.mob_app_assignment.domain.model.reportReferenceCode
 import com.king.mob_app_assignment.ui.components.AppTopBar
 import com.king.mob_app_assignment.ui.components.CategoryChip
+import com.king.mob_app_assignment.ui.components.InfoCard
+import com.king.mob_app_assignment.ui.components.InfoCardSeverity
 import com.king.mob_app_assignment.ui.components.LoadingIndicator
 import com.king.mob_app_assignment.ui.components.PrimaryActionButton
 import com.king.mob_app_assignment.ui.components.StatusBadge
 import com.king.mob_app_assignment.ui.components.VideoPlayer
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.king.mob_app_assignment.ui.theme.translatedStringResource
 
 private fun createResolutionPhotoFile(context: Context): File {
     val dir = File(context.getExternalFilesDir(null), "resolution_photos").apply { mkdirs() }
@@ -85,10 +99,11 @@ private fun createResolutionPhotoFile(context: Context): File {
 private fun resolutionPhotoUriFor(context: Context, file: File): Uri =
     FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
 
+@Composable
 private fun ReportStatus.label(): String = when (this) {
-    ReportStatus.SUBMITTED -> "Submitted"
-    ReportStatus.IN_REVIEW -> "In review"
-    ReportStatus.RESOLVED -> "Resolved"
+    ReportStatus.SUBMITTED -> translatedStringResource(R.string.report_detail_status_submitted)
+    ReportStatus.IN_REVIEW -> translatedStringResource(R.string.report_detail_status_in_review)
+    ReportStatus.RESOLVED -> translatedStringResource(R.string.report_detail_status_resolved)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -100,6 +115,12 @@ fun ReportDetailScreen(
     val uiState by viewModel.uiState.collectAsState()
     val dateFormat = SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault())
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    // Which media (if any) is currently shown full-size in FullMediaDialog - null means the
+    // dialog is closed. Holds a model (the same value AsyncImage/VideoPlayer already take, a
+    // Uri or a String path) plus whether it's a video, since this screen has two different
+    // pieces of media that can be expanded (the report's own capture, and an admin's resolution
+    // photo) and both need to open the same dialog.
+    var expandedMedia by remember { mutableStateOf<Pair<Any, Boolean>?>(null) }
 
     LaunchedEffect(uiState.isDeleted) {
         if (uiState.isDeleted) onBackClick()
@@ -110,16 +131,16 @@ fun ReportDetailScreen(
     if (showDeleteConfirm) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
-            title = { Text("Delete this report?") },
-            text = { Text("This cannot be undone.") },
+            title = { Text(translatedStringResource(R.string.report_detail_delete_dialog_title)) },
+            text = { Text(translatedStringResource(R.string.report_detail_delete_dialog_message)) },
             confirmButton = {
                 TextButton(onClick = {
                     showDeleteConfirm = false
                     viewModel.deleteReport()
-                }) { Text("Delete") }
+                }) { Text(translatedStringResource(R.string.report_detail_delete_dialog_confirm)) }
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel") }
+                TextButton(onClick = { showDeleteConfirm = false }) { Text(translatedStringResource(R.string.report_detail_delete_dialog_cancel)) }
             },
         )
     }
@@ -127,26 +148,29 @@ fun ReportDetailScreen(
     if (uiState.deleteErrorMessage != null) {
         AlertDialog(
             onDismissRequest = viewModel::dismissDeleteError,
-            title = { Text("Couldn't delete report") },
+            title = { Text(translatedStringResource(R.string.report_detail_delete_error_title)) },
             text = { Text(uiState.deleteErrorMessage.orEmpty()) },
             confirmButton = {
-                TextButton(onClick = viewModel::dismissDeleteError) { Text("OK") }
+                TextButton(onClick = viewModel::dismissDeleteError) { Text(translatedStringResource(R.string.report_detail_delete_error_ok)) }
             },
         )
     }
 
+    val editContentDescription = translatedStringResource(R.string.report_detail_edit_action)
+    val deleteContentDescription = translatedStringResource(R.string.report_detail_delete_action)
+
     Scaffold(
         topBar = {
             AppTopBar(
-                title = "Report detail",
+                title = translatedStringResource(R.string.report_detail_title),
                 onBackClick = onBackClick,
                 actions = {
                     if (canEditOrDelete && !uiState.isEditing) {
                         IconButton(onClick = viewModel::startEditing) {
-                            Icon(Icons.Filled.Edit, contentDescription = "Edit report")
+                            Icon(Icons.Filled.Edit, contentDescription = editContentDescription)
                         }
                         IconButton(onClick = { showDeleteConfirm = true }) {
-                            Icon(Icons.Filled.Delete, contentDescription = "Delete report")
+                            Icon(Icons.Filled.Delete, contentDescription = deleteContentDescription)
                         }
                     }
                 },
@@ -160,7 +184,7 @@ fun ReportDetailScreen(
             }
         } else if (report == null) {
             Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                Text("Report not found", style = MaterialTheme.typography.titleMedium)
+                Text(translatedStringResource(R.string.report_detail_not_found), style = MaterialTheme.typography.titleMedium)
             }
         } else {
             Column(
@@ -184,24 +208,21 @@ fun ReportDetailScreen(
                     val videoUri = report.videoUrl?.let(Uri::parse)
                         ?: report.localVideoPath?.let { File(it) }?.let(Uri::fromFile)
                     if (videoUri != null) {
-                        VideoPlayer(
-                            uri = videoUri,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .aspectRatio(3f / 4f)
-                                .clip(MaterialTheme.shapes.medium),
+                        ReportMediaThumbnail(
+                            model = videoUri,
+                            isVideo = true,
+                            onClick = { expandedMedia = videoUri to true },
                         )
                     }
                 } else {
-                    AsyncImage(
-                        model = report.photoUrl ?: report.localPhotoPath,
-                        contentDescription = "Report photo",
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .aspectRatio(3f / 4f)
-                            .clip(MaterialTheme.shapes.medium),
-                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                    )
+                    val photoModel = report.photoUrl ?: report.localPhotoPath
+                    if (photoModel != null) {
+                        ReportMediaThumbnail(
+                            model = photoModel,
+                            isVideo = false,
+                            onClick = { expandedMedia = photoModel to false },
+                        )
+                    }
                 }
 
                 if (report.isAnonymous) {
@@ -213,7 +234,7 @@ fun ReportDetailScreen(
                             modifier = Modifier.size(16.dp),
                         )
                         Text(
-                            text = "Submitted anonymously",
+                            text = translatedStringResource(R.string.report_detail_anonymous_label),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(start = 6.dp),
@@ -221,39 +242,30 @@ fun ReportDetailScreen(
                     }
                 }
 
-                if (report.needsAiReview && !uiState.isEditing) {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = MaterialTheme.shapes.medium,
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-                    ) {
-                        Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-                            Text(
-                                text = "AI review needed",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onErrorContainer,
+                // Admin-hidden: this card and its "review and resubmit" action are meaningful
+                // only to the citizen who owns the report (they're the one being asked to pick a
+                // category) - an admin viewing the same report has no use for it, and its wording
+                // ("choose the correct category yourself and add a note, then resubmit") doesn't
+                // make sense addressed to anyone else.
+                if (report.needsAiReview && !uiState.isEditing && !uiState.isAdmin) {
+                    Column {
+                        // Deliberately does not surface the AI's own low-confidence guess (e.g.
+                        // "Other" vs "Uncategorized") - that phrasing read as the AI contradicting
+                        // the user's own choice rather than admitting it couldn't tell, which was
+                        // confusing. Always frames this as "the AI couldn't categorize it, please
+                        // choose yourself" regardless of whether aiSuggestedCategory is set.
+                        InfoCard(
+                            title = translatedStringResource(R.string.report_detail_ai_review_title),
+                            message = translatedStringResource(R.string.report_detail_ai_review_message),
+                            icon = Icons.Filled.WarningAmber,
+                            severity = InfoCardSeverity.Warning,
+                        )
+                        if (uiState.isOwner) {
+                            PrimaryActionButton(
+                                text = translatedStringResource(R.string.report_detail_review_and_resubmit),
+                                onClick = viewModel::startEditing,
+                                modifier = Modifier.padding(top = 12.dp),
                             )
-                            val suggestionText = report.aiSuggestedCategory?.let { suggested ->
-                                val suggestedText = if (suggested == ReportCategory.CUSTOM && report.aiSuggestedCustomLabel.isNotBlank()) {
-                                    report.aiSuggestedCustomLabel
-                                } else {
-                                    suggested.displayLabel()
-                                }
-                                "Our AI suggests this might be \"$suggestedText\" instead of \"${report.categoryDisplayText()}\"."
-                            } ?: "Our AI couldn't confidently classify this photo."
-                            Text(
-                                text = "$suggestionText Please review the category and add a note, then resubmit.",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onErrorContainer,
-                                modifier = Modifier.padding(top = 4.dp),
-                            )
-                            if (uiState.isOwner) {
-                                PrimaryActionButton(
-                                    text = "Review and resubmit",
-                                    onClick = viewModel::startEditing,
-                                    modifier = Modifier.padding(top = 12.dp),
-                                )
-                            }
                         }
                     }
                 }
@@ -291,6 +303,18 @@ fun ReportDetailScreen(
                     }
                 }
 
+                // Blank for an anonymous report or one submitted before reporterName existed -
+                // see ReportListItem's identical gate for why this simply renders nothing rather
+                // than an empty "Reported by" line in either case.
+                if (uiState.isAdmin && !report.isAnonymous && report.reporterName.isNotBlank()) {
+                    Text(
+                        text = translatedStringResource(R.string.report_list_reported_by, report.reporterName),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+
                 if (uiState.isAdmin) {
                     AdminWorkflowSection(
                         currentDepartment = report.department,
@@ -306,7 +330,7 @@ fun ReportDetailScreen(
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = MaterialTheme.shapes.medium,
-                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = com.king.mob_app_assignment.ui.theme.Elevation.resting),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                 ) {
                     Column(
@@ -315,24 +339,24 @@ fun ReportDetailScreen(
                     ) {
                         DetailRow(
                             icon = Icons.Filled.LocationOn,
-                            label = "Location",
-                            value = report.address.ifBlank { "Address unavailable" },
+                            label = translatedStringResource(R.string.report_detail_location_label),
+                            value = report.address.ifBlank { translatedStringResource(R.string.report_detail_address_unavailable) },
                             secondary = "${report.latitude}, ${report.longitude}",
                         )
                         DetailRow(
                             icon = Icons.Filled.Explore,
-                            label = "Heading",
+                            label = translatedStringResource(R.string.report_detail_heading_label),
                             value = "${report.headingDegrees.toInt()}° ${report.headingCardinal}",
                         )
                         DetailRow(
                             icon = Icons.Filled.Schedule,
-                            label = "Captured",
+                            label = translatedStringResource(R.string.report_detail_captured_label),
                             value = dateFormat.format(Date(report.timestamp)),
                         )
                         if (!uiState.isEditing && report.note.isNotBlank()) {
                             DetailRow(
                                 icon = Icons.Filled.Notes,
-                                label = "Note",
+                                label = translatedStringResource(R.string.report_detail_note_label),
                                 value = report.note,
                             )
                         }
@@ -347,96 +371,137 @@ fun ReportDetailScreen(
                     )
                 }
 
+                uiState.incident?.let { incident ->
+                    IncidentSummaryCard(incident = incident)
+                }
+
                 if (!uiState.isAdmin && !uiState.isEditing) {
-                    CitizenTriageAndUpvoteRow(
+                    CitizenTriageRow(
                         department = report.department,
                         priority = report.priority,
-                        upvoteCount = report.upvoteCount,
-                        isUpvotedByMe = uiState.currentUid != null && uiState.currentUid in report.upvotedByUids,
-                        canUpvote = !uiState.isOwner && uiState.currentUid != null,
-                        onUpvoteClick = viewModel::toggleUpvote,
                     )
                 }
 
                 if (!uiState.isAdmin && !uiState.isEditing && report.resolutionNote.isNotBlank()) {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = MaterialTheme.shapes.medium,
-                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-                    ) {
-                        Column(
-                            modifier = Modifier.fillMaxWidth().padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp),
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Filled.CheckCircle,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                )
-                                Text(
-                                    text = "Update from the city",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    modifier = Modifier.padding(start = 8.dp),
-                                )
-                            }
-                            Text(
-                                text = report.resolutionNote,
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    Column {
+                        InfoCard(
+                            title = translatedStringResource(R.string.report_detail_resolution_update_title),
+                            message = report.resolutionNote,
+                            icon = Icons.Filled.CheckCircle,
+                            severity = InfoCardSeverity.Positive,
+                        )
+                        val resolutionPhotoPath = report.resolutionPhotoPath
+                        if (!resolutionPhotoPath.isNullOrBlank()) {
+                            ReportMediaThumbnail(
+                                model = resolutionPhotoPath,
+                                isVideo = false,
+                                contentDescription = translatedStringResource(R.string.report_detail_resolution_photo_description),
+                                onClick = { expandedMedia = resolutionPhotoPath to false },
+                                modifier = Modifier.padding(top = 12.dp),
                             )
-                            if (!report.resolutionPhotoPath.isNullOrBlank()) {
-                                AsyncImage(
-                                    model = report.resolutionPhotoPath,
-                                    contentDescription = "Resolution photo",
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .aspectRatio(3f / 4f)
-                                        .clip(MaterialTheme.shapes.medium),
-                                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                                )
-                            }
                         }
                     }
                 }
+            }
+
+            expandedMedia?.let { (model, isVideo) ->
+                FullMediaDialog(model = model, isVideo = isVideo, onDismiss = { expandedMedia = null })
+            }
+        }
+    }
+}
+
+/**
+ * Small tappable preview of a report's photo/video (or an admin's resolution photo) - replaces
+ * what used to be a full-width 3:4 image/video permanently occupying a large share of the
+ * screen, the main reason this page needed to scroll as far as it did. Tapping it opens
+ * [FullMediaDialog]. Mirrors CaptureScreen.kt's CaptureThumbnail/FullMediaDialog pattern so both
+ * screens present captured media the same way.
+ */
+@Composable
+private fun ReportMediaThumbnail(
+    model: Any,
+    isVideo: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    contentDescription: String? = null,
+) {
+    val resolvedContentDescription = contentDescription ?: translatedStringResource(R.string.report_detail_media_photo_description)
+    Box(
+        modifier = modifier
+            .size(72.dp)
+            .shadow(elevation = com.king.mob_app_assignment.ui.theme.Elevation.raised, shape = MaterialTheme.shapes.medium)
+            .clip(MaterialTheme.shapes.medium)
+            .clickable(onClick = onClick),
+    ) {
+        if (isVideo) {
+            Box(
+                modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.PhotoCamera,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        } else {
+            AsyncImage(
+                model = model,
+                contentDescription = resolvedContentDescription,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+            )
+        }
+    }
+}
+
+/** Full-screen on-demand view of a report's media, opened from [ReportMediaThumbnail]. */
+@Composable
+private fun FullMediaDialog(model: Any, isVideo: Boolean, onDismiss: () -> Unit) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+            if (isVideo && model is Uri) {
+                VideoPlayer(uri = model, modifier = Modifier.fillMaxSize())
+            } else {
+                AsyncImage(
+                    model = model,
+                    contentDescription = translatedStringResource(R.string.report_detail_full_media_description),
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit,
+                )
+            }
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
+            ) {
+                Icon(Icons.Filled.Close, contentDescription = translatedStringResource(R.string.report_detail_close_action), tint = Color.White)
             }
         }
     }
 }
 
 @Composable
-private fun CitizenTriageAndUpvoteRow(
+private fun CitizenTriageRow(
     department: Department?,
     priority: ReportPriority,
-    upvoteCount: Int,
-    isUpvotedByMe: Boolean,
-    canUpvote: Boolean,
-    onUpvoteClick: () -> Unit,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.medium,
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = com.king.mob_app_assignment.ui.theme.Elevation.resting),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                DepartmentLabel(department = department)
-                Spacer(modifier = Modifier.width(12.dp))
-                PriorityIndicator(priority = priority)
-            }
-            UpvoteButton(
-                upvoteCount = upvoteCount,
-                isUpvotedByMe = isUpvotedByMe,
-                canUpvote = canUpvote,
-                onClick = onUpvoteClick,
-            )
+            DepartmentLabel(department = department)
+            Spacer(modifier = Modifier.width(12.dp))
+            PriorityIndicator(priority = priority)
         }
     }
 }
@@ -455,7 +520,7 @@ private fun EditReportSection(
     var customLabel by remember { mutableStateOf(initialCustomLabel) }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(text = "Edit report", style = MaterialTheme.typography.headlineSmall)
+        Text(text = translatedStringResource(R.string.report_detail_edit_heading), style = MaterialTheme.typography.headlineSmall)
 
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             items(ReportCategory.selectableEntries) { category ->
@@ -472,9 +537,9 @@ private fun EditReportSection(
                 value = customLabel,
                 onValueChange = { if (it.length <= 80) customLabel = it },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Describe the issue") },
-                placeholder = { Text("e.g. Fallen tree blocking road") },
-                supportingText = { Text("${customLabel.length}/80") },
+                label = { Text(translatedStringResource(R.string.report_detail_describe_issue_label)) },
+                placeholder = { Text(translatedStringResource(R.string.report_detail_describe_issue_placeholder)) },
+                supportingText = { Text(translatedStringResource(R.string.report_detail_char_count, customLabel.length, 80)) },
                 singleLine = true,
             )
         }
@@ -483,18 +548,18 @@ private fun EditReportSection(
             value = note,
             onValueChange = { if (it.length <= 500) note = it },
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("Note") },
-            supportingText = { Text("${note.length}/500") },
+            label = { Text(translatedStringResource(R.string.report_detail_note_label)) },
+            supportingText = { Text(translatedStringResource(R.string.report_detail_char_count, note.length, 500)) },
         )
 
         val canSave = selectedCategory != ReportCategory.CUSTOM || customLabel.isNotBlank()
 
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             OutlinedButton(onClick = onCancel, enabled = !isSaving, modifier = Modifier.weight(1f)) {
-                Text("Cancel")
+                Text(translatedStringResource(R.string.report_detail_cancel))
             }
             PrimaryActionButton(
-                text = "Save",
+                text = translatedStringResource(R.string.report_detail_save),
                 onClick = { onSave(selectedCategory, note, customLabel.trim()) },
                 enabled = canSave,
                 isLoading = isSaving,
@@ -530,16 +595,16 @@ private fun AdminWorkflowSection(
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.medium,
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = com.king.mob_app_assignment.ui.theme.Elevation.resting),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(text = "Admin workflow", style = MaterialTheme.typography.titleMedium)
+            Text(text = translatedStringResource(R.string.report_detail_admin_workflow_title), style = MaterialTheme.typography.titleMedium)
 
-            Text(text = "Department", style = MaterialTheme.typography.labelLarge)
+            Text(text = translatedStringResource(R.string.report_detail_department_label), style = MaterialTheme.typography.labelLarge)
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(Department.entries.toList()) { department ->
                     CategoryChip(
@@ -552,7 +617,7 @@ private fun AdminWorkflowSection(
                 }
             }
 
-            Text(text = "Priority", style = MaterialTheme.typography.labelLarge)
+            Text(text = translatedStringResource(R.string.report_detail_priority_label), style = MaterialTheme.typography.labelLarge)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 ReportPriority.entries.forEach { priority ->
                     FilterChip(
@@ -570,7 +635,7 @@ private fun AdminWorkflowSection(
                 }
             }
 
-            Text(text = "Status", style = MaterialTheme.typography.labelLarge)
+            Text(text = translatedStringResource(R.string.report_detail_status_label), style = MaterialTheme.typography.labelLarge)
             if (selectedStatusForChange == null) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ReportStatus.entries.forEach { status ->
@@ -595,15 +660,15 @@ private fun AdminWorkflowSection(
                 val targetStatus = selectedStatusForChange!!
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = "Moving to \"${targetStatus.label()}\" - add a resolution note for the citizen:",
+                        text = translatedStringResource(R.string.report_detail_status_change_prompt, targetStatus.label()),
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     OutlinedTextField(
                         value = resolutionNote,
                         onValueChange = { if (it.length <= 500) resolutionNote = it },
                         modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Resolution note") },
-                        supportingText = { Text("${resolutionNote.length}/500") },
+                        label = { Text(translatedStringResource(R.string.report_detail_resolution_note_label)) },
+                        supportingText = { Text(translatedStringResource(R.string.report_detail_char_count, resolutionNote.length, 500)) },
                         minLines = 3,
                     )
                     if (targetStatus == ReportStatus.RESOLVED) {
@@ -615,7 +680,7 @@ private fun AdminWorkflowSection(
                                     tint = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.padding(end = 8.dp),
                                 )
-                                Text("Resolution photo attached", style = MaterialTheme.typography.bodyMedium)
+                                Text(translatedStringResource(R.string.report_detail_resolution_photo_attached), style = MaterialTheme.typography.bodyMedium)
                             }
                         } else {
                             OutlinedButton(
@@ -628,7 +693,7 @@ private fun AdminWorkflowSection(
                                 },
                             ) {
                                 Icon(Icons.Filled.PhotoCamera, contentDescription = null)
-                                Text(text = "Attach photo (optional)", modifier = Modifier.padding(start = 8.dp))
+                                Text(text = translatedStringResource(R.string.report_detail_attach_photo_optional), modifier = Modifier.padding(start = 8.dp))
                             }
                         }
                     }
@@ -637,9 +702,9 @@ private fun AdminWorkflowSection(
                             onClick = { selectedStatusForChange = null },
                             enabled = !isUpdatingStatus,
                             modifier = Modifier.weight(1f),
-                        ) { Text("Cancel") }
+                        ) { Text(translatedStringResource(R.string.report_detail_cancel)) }
                         PrimaryActionButton(
-                            text = "Update status",
+                            text = translatedStringResource(R.string.report_detail_update_status),
                             onClick = {
                                 onStatusUpdated(targetStatus, resolutionNote.trim(), resolutionPhotoFile)
                                 selectedStatusForChange = null
@@ -683,6 +748,34 @@ private fun DetailRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+        }
+    }
+}
+
+// Citizen-facing incident visibility, deliberately kept simple and free of admin jargon (no
+// "confidence score," no member-management controls, no severity/department editing - those
+// stay admin-only). The brief's own requirement is "show incident information to citizens where
+// appropriate" - this is that: a citizen sees their report isn't isolated, without needing to
+// understand incidents, work orders, or risk scoring as concepts at all.
+@Composable
+private fun IncidentSummaryCard(incident: com.king.mob_app_assignment.domain.model.Incident) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+            Text(
+                text = translatedStringResource(R.string.report_detail_incident_summary_title),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+            Text(
+                text = translatedStringResource(R.string.report_detail_incident_summary_message, incident.reportCount, incident.title),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier.padding(top = 4.dp),
+            )
         }
     }
 }

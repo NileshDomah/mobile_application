@@ -25,12 +25,15 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.king.mob_app_assignment.R
 import com.king.mob_app_assignment.ui.components.AppTopBar
 import com.king.mob_app_assignment.ui.theme.PillShape
 import com.king.mob_app_assignment.ui.theme.StatusResolvedLight
 import com.king.mob_app_assignment.ui.theme.StatusResolvedLightContainer
 import com.king.mob_app_assignment.util.PermissionManager
+import com.king.mob_app_assignment.ui.theme.translatedStringResource
 
 @Composable
 fun PermissionDashboardScreen(
@@ -49,7 +52,7 @@ fun PermissionDashboardScreen(
     LaunchedEffect(Unit) { viewModel.refresh() }
 
     Scaffold(
-        topBar = { AppTopBar(title = "Permission Dashboard", onBackClick = onBackClick) },
+        topBar = { AppTopBar(title = translatedStringResource(R.string.permission_dashboard_title), onBackClick = onBackClick) },
     ) { padding ->
         LazyColumn(
             modifier = Modifier
@@ -62,6 +65,10 @@ fun PermissionDashboardScreen(
                 PermissionRow(
                     status = status,
                     onGrantClick = {
+                        // See PermissionRequestHistory's own doc comment - marked right before
+                        // the real system dialog launches, so isPermanentlyDenied() can tell
+                        // "never asked" apart from "genuinely denied, don't ask again."
+                        com.king.mob_app_assignment.util.PermissionRequestHistory.markRequested(context, status.permission)
                         permissionLauncher.launch(status.permission.manifestPermission)
                     },
                     onOpenSettingsClick = {
@@ -82,7 +89,11 @@ private fun GrantedStatusChip(isGranted: Boolean, modifier: Modifier = Modifier)
     }
     val content = if (isGranted) StatusResolvedLight else MaterialTheme.colorScheme.onErrorContainer
     Text(
-        text = if (isGranted) "Granted" else "Not granted",
+        text = if (isGranted) {
+            translatedStringResource(R.string.permission_dashboard_granted)
+        } else {
+            translatedStringResource(R.string.permission_dashboard_not_granted)
+        },
         style = MaterialTheme.typography.labelMedium,
         color = content,
         modifier = modifier
@@ -131,7 +142,13 @@ private fun PermissionRow(
                     onClick = if (permanentlyDenied) onOpenSettingsClick else onGrantClick,
                     shape = MaterialTheme.shapes.small,
                 ) {
-                    Text(if (permanentlyDenied) "Open Settings" else "Grant")
+                    Text(
+                        if (permanentlyDenied) {
+                            translatedStringResource(R.string.permission_dashboard_open_settings)
+                        } else {
+                            translatedStringResource(R.string.permission_dashboard_grant)
+                        },
+                    )
                 }
             }
         }

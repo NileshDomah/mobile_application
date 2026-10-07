@@ -15,12 +15,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.king.mob_app_assignment.R
 import com.king.mob_app_assignment.domain.model.ReportStatus
 import com.king.mob_app_assignment.domain.model.StatusHistoryEntry
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.king.mob_app_assignment.ui.theme.translatedStringResource
 
 /**
  * Vertical timeline of every status transition a report has gone through, oldest first. Gives
@@ -43,10 +46,10 @@ fun StatusTimelineCard(
     Card(
         modifier = modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.medium,
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = com.king.mob_app_assignment.ui.theme.Elevation.resting),
     ) {
         Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-            Text(text = "Status history", style = MaterialTheme.typography.titleMedium)
+            Text(text = translatedStringResource(R.string.status_timeline_title), style = MaterialTheme.typography.titleMedium)
             Column(modifier = Modifier.padding(top = 12.dp)) {
                 entries.forEachIndexed { index, entry ->
                     TimelineRow(
@@ -116,8 +119,9 @@ private fun TimelineRow(
     }
 }
 
+@Composable
 private fun ReportStatus.timelineLabel(): String = when (this) {
-    ReportStatus.SUBMITTED -> "Report submitted"
-    ReportStatus.IN_REVIEW -> "In review by the city"
-    ReportStatus.RESOLVED -> "Resolved"
+    ReportStatus.SUBMITTED -> translatedStringResource(R.string.status_timeline_submitted)
+    ReportStatus.IN_REVIEW -> translatedStringResource(R.string.status_timeline_in_review)
+    ReportStatus.RESOLVED -> translatedStringResource(R.string.status_timeline_resolved)
 }

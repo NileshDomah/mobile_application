@@ -55,6 +55,19 @@ class BiometricCredentialStore @Inject constructor(
      * only becomes usable once BiometricPrompt reports success, which is what makes this
      * approach actually enforce the gate at the Keystore level rather than trusting the caller
      * to check a boolean after the fact.
+     *
+     * ROOT CAUSE (2026-09-10, user-reported "biometrics on existing account keep saying couldn't
+     * be verified"): this used to swallow every failure via runCatching{}.getOrNull() with zero
+     * logging - a caller getting null back (see AppLockScreen's own `?: return`) had no way to
+     * tell "genuinely no credential stored yet" apart from "a real Keystore failure occurred."
+     * The most likely real failure for an "existing account" (one that enabled biometric login
+     * before app-lock existed) is KeyPermanentlyInvalidatedException: Android invalidates any
+     * Keystore key generated with setUserAuthenticationRequired(true) the moment the device's
+     * biometric enrollment changes AT ALL (a new fingerprint added, all fingerprints re-enrolled,
+     * etc) - the key becomes permanently unusable, by design, since the biometric data it was
+     * bound to no longer matches what's enrolled. That's not a bug in this app, it's the Keystore
+     * doing exactly what it's supposed to - but the OLD code gave the user no way to recover
+     * short of guessing to go disable-then-re-enable biometric login manually in Settings.
      */
     fun buildDecryptCryptoObject(): BiometricPrompt.CryptoObject? {
         val ivBase64 = prefs.getString(KEY_IV, null) ?: return null
@@ -64,6 +77,17 @@ class BiometricCredentialStore @Inject constructor(
             val iv = Base64.decode(ivBase64, Base64.NO_WRAP)
             cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv))
             BiometricPrompt.CryptoObject(cipher)
+        }.onFailure { throwable ->
+            CrashReporter.log("BiometricCredentialStore.buildDecryptCryptoObject failed: ${throwable.javaClass.simpleName}: ${throwable.message}")
+            CrashReporter.recordException(throwable)
+            if (throwable is android.security.keystore.KeyPermanentlyInvalidatedException) {
+                // The stored credential can never successfully decrypt again (the Keystore key
+                // is gone for good) - clearing it now means isEnabled()/isBiometricEnabled() flip
+                // to false immediately, so the UI stops offering a biometric option that can only
+                // ever fail, and the user falls through to PIN cleanly instead of hitting the
+                // same dead end on every future attempt.
+                disable()
+            }
         }.getOrNull()
     }
 
@@ -77,23 +101,60 @@ class BiometricCredentialStore @Inject constructor(
     }
 
     /**
-     * Enables biometric login: generates (or reuses) the biometric-gated Keystore key, encrypts
-     * [password], and stores the ciphertext + email. Encryption itself does NOT require a
-     * biometric prompt (only decryption does, per [KeyGenParameterSpec] below) - this runs right
-     * after the user's own successful manual password login, while the password is already
-     * in hand, so there's nothing gained by prompting again just to enable the feature.
+     * Builds an ENCRYPT-mode [BiometricPrompt.CryptoObject] to pass into
+     * [BiometricPrompt.authenticate] when enabling biometric login. Every operation on this key
+     * (encrypt AND decrypt - see [getOrCreateKey]'s setUserAuthenticationRequired(true), which
+     * covers both purposes with no validity-duration grace period) requires its OWN fresh
+     * Keystore-tracked authentication - it is NOT enough for a BiometricPrompt to merely report
+     * onAuthenticationSucceeded in isolation; the Cipher that Keystore actually unlocks must be
+     * the very one carried inside the CryptoObject that prompt authenticated against.
+     *
+     * ROOT CAUSE (2026-09-11, user-reported "keeps asking whether I want to enable it but never
+     * does" - the SAME symptom as the 2026-09-10 fix noted on `enable()` below, which turned out
+     * to be incomplete): SettingsScreen's BiometricPrompt.authenticate(promptInfo) call passed NO
+     * CryptoObject at all, so a successful prompt there verified the user's biometric identity but
+     * left the Keystore key's own per-operation auth-gate completely untouched. The subsequent
+     * call into (the old) enable() then created its own brand-new Cipher and called
+     * cipher.init(ENCRYPT_MODE, ...) on it - which immediately throws
+     * UserNotAuthenticatedException again, since THIS Cipher was never the one Keystore just
+     * authenticated, no matter how recently the (disconnected) prompt succeeded. That exception
+     * was caught by enable()'s runCatching and turned into a silent `false`, reproducing exactly
+     * the reported loop: prompt succeeds, dialog closes, biometric login is still off.
      */
-    fun enable(email: String, password: String): Boolean = runCatching {
+    fun buildEnableCryptoObject(): BiometricPrompt.CryptoObject? = runCatching {
         val secretKey = getOrCreateKey()
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, secretKey)
-        val encrypted = cipher.doFinal(password.toByteArray(Charsets.UTF_8))
+        BiometricPrompt.CryptoObject(cipher)
+    }.onFailure { throwable ->
+        CrashReporter.log("BiometricCredentialStore.buildEnableCryptoObject failed: ${throwable.javaClass.simpleName}: ${throwable.message}")
+        CrashReporter.recordException(throwable)
+    }.getOrNull()
+
+    /**
+     * Finishes enabling biometric login using the SAME [Cipher] instance BiometricPrompt just
+     * authenticated (handed back inside its AuthenticationResult.cryptoObject) - see
+     * [buildEnableCryptoObject]'s doc comment for why creating a fresh Cipher here instead would
+     * fail every time. Encrypts [password] and stores the ciphertext + email.
+     */
+    fun enable(email: String, password: String, authenticatedCipher: Cipher): Boolean = runCatching {
+        val encrypted = authenticatedCipher.doFinal(password.toByteArray(Charsets.UTF_8))
         prefs.edit()
             .putString(KEY_EMAIL, email)
             .putString(KEY_ENCRYPTED_PASSWORD, Base64.encodeToString(encrypted, Base64.NO_WRAP))
-            .putString(KEY_IV, Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
+            .putString(KEY_IV, Base64.encodeToString(authenticatedCipher.iv, Base64.NO_WRAP))
             .apply()
         true
+    }.onFailure { throwable ->
+        // Was previously swallowed entirely (getOrDefault(false) with no logging) - "enable"
+        // could fail for reasons that have nothing to do with a wrong password (no biometric
+        // enrolled on this device, Keystore key generation rejecting
+        // setUserAuthenticationRequired(true) on this API level/OEM, etc) and the caller had no
+        // way to tell "enable failed" apart from "it worked" other than the boolean silently
+        // being false - logging here is what made it possible to actually diagnose "enable
+        // biometric doesn't work" instead of guessing.
+        CrashReporter.log("BiometricCredentialStore.enable failed: ${throwable.javaClass.simpleName}: ${throwable.message}")
+        CrashReporter.recordException(throwable)
     }.getOrDefault(false)
 
     /** Disables biometric login and wipes the stored credential (does not touch the Keystore key). */

@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import com.king.mob_app_assignment.R
 import com.king.mob_app_assignment.ui.components.PrimaryActionButton
 import kotlinx.coroutines.launch
+import com.king.mob_app_assignment.ui.theme.translatedStringResource
 
 private data class OnboardingPage(
     val titleRes: Int,
@@ -73,7 +74,7 @@ fun OnboardingScreen(
                 onClick = onFinished,
                 modifier = Modifier.align(Alignment.CenterEnd),
             ) {
-                Text(stringResource(R.string.onboarding_skip))
+                Text(translatedStringResource(R.string.onboarding_skip))
             }
         }
 
@@ -93,9 +94,9 @@ fun OnboardingScreen(
         val isLastPage = pagerState.currentPage == pages.lastIndex
         PrimaryActionButton(
             text = if (isLastPage) {
-                stringResource(R.string.onboarding_get_started)
+                translatedStringResource(R.string.onboarding_get_started)
             } else {
-                stringResource(R.string.onboarding_next)
+                translatedStringResource(R.string.onboarding_next)
             },
             onClick = {
                 if (isLastPage) {

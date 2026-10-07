@@ -17,11 +17,14 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-enum class ReportsScope { ALL, MINE, ADMIN_ALL }
+// Only MINE is used now - the global/community "all reports" scope (and its own list+map tab)
+// was removed entirely; citizens only ever see their own reports (see MyReportsScreen.kt). The
+// enum is kept single-valued rather than deleted outright so setScope()'s call shape doesn't need
+// touching if a future admin-facing use of this same ViewModel is ever reintroduced.
+enum class ReportsScope { MINE }
 
 data class ReportsListUiState(
     val reports: List<Report> = emptyList(),
-    val filter: ReportFilterState = ReportFilterState(),
     val isLoading: Boolean = true,
     val isRefreshing: Boolean = false,
     val errorMessage: String? = null,
@@ -33,8 +36,7 @@ class ReportsListViewModel @Inject constructor(
     private val firebaseAuth: FirebaseAuth,
 ) : ViewModel() {
 
-    private val filterFlow = MutableStateFlow(ReportFilterState())
-    private val scopeFlow = MutableStateFlow(ReportsScope.ALL)
+    private val scopeFlow = MutableStateFlow(ReportsScope.MINE)
     private val isRefreshingFlow = MutableStateFlow(false)
     private val refreshTriggerFlow = MutableStateFlow(0)
 
@@ -44,11 +46,8 @@ class ReportsListViewModel @Inject constructor(
     // re-subscribe that also serves as a manual retry path if the previous listener died from a
     // connectivity drop.
     private val reportsFlow = combine(scopeFlow, refreshTriggerFlow) { s, _ -> s }
-        .flatMapLatest { s ->
-            when (s) {
-                ReportsScope.MINE -> reportRepository.getReportsForUser(firebaseAuth.currentUser?.uid.orEmpty())
-                ReportsScope.ALL, ReportsScope.ADMIN_ALL -> reportRepository.getAllReports()
-            }
+        .flatMapLatest {
+            reportRepository.getReportsForUser(firebaseAuth.currentUser?.uid.orEmpty())
         }.catch { emit(emptyList()) }
 
     private val errorFlow = MutableStateFlow<String?>(null)
@@ -61,13 +60,11 @@ class ReportsListViewModel @Inject constructor(
 
     val uiState: StateFlow<ReportsListUiState> = combine(
         reportsFlow,
-        filterFlow,
         isRefreshingFlow,
         errorFlow,
-    ) { reports, filter, isRefreshing, errorMessage ->
+    ) { reports, isRefreshing, errorMessage ->
         ReportsListUiState(
-            reports = reports.applyFilter(filter),
-            filter = filter,
+            reports = reports.sortedByDescending { it.timestamp },
             isLoading = false,
             isRefreshing = isRefreshing,
             errorMessage = errorMessage,
@@ -82,10 +79,6 @@ class ReportsListViewModel @Inject constructor(
         scopeFlow.value = scope
     }
 
-    fun onFilterChange(filter: ReportFilterState) {
-        filterFlow.value = filter
-    }
-
     fun refresh() {
         if (isRefreshingFlow.value) return
         viewModelScope.launch {
@@ -94,13 +87,6 @@ class ReportsListViewModel @Inject constructor(
             refreshTriggerFlow.value += 1
             delay(400)
             isRefreshingFlow.value = false
-        }
-    }
-
-    fun toggleUpvote(reportId: String) {
-        val uid = firebaseAuth.currentUser?.uid ?: return
-        viewModelScope.launch {
-            reportRepository.toggleUpvote(reportId, uid)
         }
     }
 }

@@ -1,6 +1,6 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
     <!-- Base application theme. -->
-    <style name="Theme.Mob_app_assignment" parent="Theme.MaterialComponents.DayNight.DarkActionBar">
+    <style name="Theme.Mob_app_assignment" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <!-- Primary brand color: lighter civic blue tint for dark backgrounds. -->
         <item name="colorPrimary">@color/civic_blue_light</item>
         <item name="colorPrimaryVariant">@color/civic_blue_dark</item>

@@ -1,9 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Civic/trustworthy brand palette (kept in sync with ui/theme/Color.kt) -->
-    <color name="civic_blue_dark">#003B52</color>
-    <color name="civic_blue">#0B4F6C</color>
-    <color name="civic_blue_light">#9FCBE0</color>
+    <!-- Civic/trustworthy brand palette (kept in sync with ui/theme/Color.kt's CivicBlue* /
+         CivicAmber* tonal scale - civic_blue_dark maps to CivicBlue20, civic_blue to
+         CivicBlue40 (the app's current bright primary blue), civic_blue_light to CivicBlue80). -->
+    <color name="civic_blue_dark">#002B7A</color>
+    <color name="civic_blue">#1E5FD9</color>
+    <color name="civic_blue_light">#B0C6FF</color>
     <color name="civic_amber">#B2650A</color>
     <color name="civic_amber_dark">#663600</color>
     <color name="civic_teal">#1C6E5D</color>

@@ -16,13 +16,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.king.mob_app_assignment.R
 import com.king.mob_app_assignment.domain.model.ReportStatus
+import com.king.mob_app_assignment.ui.theme.translatedStringResource
 
+@Composable
 private fun ReportStatus.label(): String = when (this) {
-    ReportStatus.SUBMITTED -> "Submitted"
-    ReportStatus.IN_REVIEW -> "In review"
-    ReportStatus.RESOLVED -> "Resolved"
+    ReportStatus.SUBMITTED -> translatedStringResource(R.string.report_detail_status_submitted)
+    ReportStatus.IN_REVIEW -> translatedStringResource(R.string.report_detail_status_in_review)
+    ReportStatus.RESOLVED -> translatedStringResource(R.string.report_detail_status_resolved)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

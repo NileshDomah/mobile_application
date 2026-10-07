@@ -5,9 +5,18 @@ import org.junit.Test
 
 class NoteSanitizerTest {
 
+    // sanitizeNote() only trims LEADING whitespace live, on purpose - see its own doc comment.
+    // Trailing whitespace must survive here so a user can type "word " and keep going without the
+    // space they just typed vanishing before their next keystroke lands. The real trim-both-ends
+    // pass only happens once, at submit time, via sanitizeNoteForSubmit() below.
     @Test
-    fun trimsWhitespace() {
-        assertEquals("hello", NoteSanitizer.sanitizeNote("  hello  "))
+    fun trimsLeadingWhitespaceOnlyLive() {
+        assertEquals("hello  ", NoteSanitizer.sanitizeNote("  hello  "))
+    }
+
+    @Test
+    fun trimsBothEndsAtSubmitTime() {
+        assertEquals("hello", NoteSanitizer.sanitizeNoteForSubmit("  hello  "))
     }
 
     @Test

@@ -16,6 +16,13 @@ val localProperties = Properties().apply {
     }
 }
 val geoapifyApiKey: String = localProperties.getProperty("GEOAPIFY_API_KEY", "")
+val mapsApiKey: String = localProperties.getProperty("MAPS_API_KEY", "")
+val openRouterApiKey: String = localProperties.getProperty("OPENROUTER_API_KEY", "")
+
+// Renames the built APK file itself (e.g. app-debug.apk -> shake-to-report-debug.apk) - the
+// on-device app label (Settings > Apps, home screen icon) is controlled separately by
+// strings.xml's app_name, already set to "Shake to Report".
+base.archivesName.set("shake-to-report")
 
 android {
     namespace = "com.king.mob_app_assignment"
@@ -35,6 +42,13 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         buildConfigField("String", "GEOAPIFY_API_KEY", "\"$geoapifyApiKey\"")
+        buildConfigField("String", "MAPS_API_KEY", "\"$mapsApiKey\"")
+        buildConfigField("String", "OPENROUTER_API_KEY", "\"$openRouterApiKey\"")
+
+        // Consumed by AndroidManifest.xml's com.google.android.geo.API_KEY meta-data entry -
+        // manifest placeholders (unlike BuildConfig fields) can be referenced directly inside
+        // manifest XML, which is where the Maps SDK actually reads its key from at runtime.
+        manifestPlaceholders["MAPS_API_KEY"] = mapsApiKey
     }
 
     buildTypes {
@@ -92,9 +106,11 @@ dependencies {
     implementation(libs.firebase.storage)
     implementation(libs.firebase.messaging)
     implementation(libs.firebase.crashlytics)
+    implementation(libs.firebase.functions)
 
     implementation(libs.play.services.location)
     implementation(libs.mlkit.image.labeling)
+    implementation(libs.mlkit.translate)
     implementation(libs.coil.compose)
 
     implementation(libs.androidx.datastore.preferences)
@@ -105,6 +121,8 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.androidx.core.splashscreen)
     implementation(libs.maplibre.android)
+    implementation(libs.maps.compose)
+    implementation(libs.play.services.maps)
 
     implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.androidx.hilt.work)

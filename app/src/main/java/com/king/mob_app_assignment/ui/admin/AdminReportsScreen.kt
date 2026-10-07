@@ -19,8 +19,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.king.mob_app_assignment.R
 import com.king.mob_app_assignment.domain.model.Report
 import com.king.mob_app_assignment.ui.components.AppTopBar
 import com.king.mob_app_assignment.ui.components.EmptyState
@@ -32,6 +34,7 @@ import com.king.mob_app_assignment.ui.reports.ReportListItem
 import com.king.mob_app_assignment.ui.reports.ReportSearchField
 import com.king.mob_app_assignment.ui.reports.StatusDropdown
 import com.king.mob_app_assignment.ui.reports.isActive
+import com.king.mob_app_assignment.ui.theme.translatedStringResource
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -42,9 +45,10 @@ fun AdminReportsScreen(
     val uiState by viewModel.uiState.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
 
+    val retryLabel = translatedStringResource(R.string.admin_reports_retry)
     LaunchedEffect(uiState.errorMessage) {
         val message = uiState.errorMessage ?: return@LaunchedEffect
-        val result = snackbarHostState.showSnackbar(message = message, actionLabel = "Retry")
+        val result = snackbarHostState.showSnackbar(message = message, actionLabel = retryLabel)
         viewModel.dismissError()
         if (result == SnackbarResult.ActionPerformed) {
             viewModel.refresh()
@@ -52,7 +56,7 @@ fun AdminReportsScreen(
     }
 
     Scaffold(
-        topBar = { AppTopBar(title = "All Reports (Admin)") },
+        topBar = { AppTopBar(title = translatedStringResource(R.string.admin_reports_title)) },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp)) {
@@ -72,17 +76,18 @@ fun AdminReportsScreen(
                 } else if (uiState.reports.isEmpty()) {
                     if (uiState.filter.isActive) {
                         EmptyState(
-                            title = "No matching reports",
-                            message = "No reports match your search or filters. Try adjusting them.",
+                            title = translatedStringResource(R.string.admin_reports_no_matching_title),
+                            message = translatedStringResource(R.string.admin_reports_no_matching_message),
                         )
                     } else {
-                        EmptyState(message = "No reports yet.")
+                        EmptyState(message = translatedStringResource(R.string.admin_reports_empty))
                     }
                 } else {
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(uiState.reports, key = { it.id }) { report ->
                             ReportListItem(
                                 report = report,
+                                isAdmin = true,
                                 onClick = { onReportClick(report) },
                                 trailingContent = {
                                     Column(horizontalAlignment = Alignment.End) {

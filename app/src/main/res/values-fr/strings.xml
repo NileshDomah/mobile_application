@@ -1,11 +1,18 @@
 <resources>
     <!-- Bottom navigation -->
     <string name="nav_home">Accueil</string>
-    <string name="nav_reports">Signalements</string>
     <string name="nav_my_reports">Mes signalements</string>
     <string name="nav_profile">Profil</string>
     <string name="nav_admin">Admin</string>
     <string name="nav_admin_dashboard">Tableau de bord</string>
+    <string name="nav_admin_support">Support</string>
+    <string name="nav_map">Carte</string>
+    <string name="map_title">Carte</string>
+    <string name="map_legend_pothole">Nid-de-poule</string>
+    <string name="map_legend_streetlight">Lampadaire</string>
+    <string name="map_legend_garbage">Déchets</string>
+    <string name="map_legend_water_leak">Fuite d\'eau</string>
+    <string name="map_legend_other">Autre</string>
 
     <!-- Auth: shared brand header -->
     <string name="auth_app_title">Shake to Report</string>
@@ -25,6 +32,7 @@
     <string name="register_subtitle">Rejoignez votre communauté pour signaler des problèmes civiques</string>
     <string name="register_display_name_label">Nom d\'affichage</string>
     <string name="register_email_label">E-mail</string>
+    <string name="register_phone_number_label">Numéro de téléphone</string>
     <string name="register_password_label">Mot de passe</string>
     <string name="register_confirm_password_label">Confirmer le mot de passe</string>
     <string name="register_button">S\'inscrire</string>
@@ -32,8 +40,12 @@
 
     <!-- Home screen -->
     <string name="home_top_bar_title">Shake to Report</string>
+    <string name="home_hero_title_line1">Secouez</string>
+    <string name="home_hero_title_line2">pour signaler</string>
     <string name="home_report_issue_button">Signaler un problème</string>
-    <string name="home_shake_tip">Astuce : secouez votre téléphone pour signaler instantanément, où que vous soyez.</string>
+    <string name="home_shake_tip">Secouez votre téléphone pour signaler un problème</string>
+    <string name="home_shake_now_button">Secouer maintenant</string>
+    <string name="home_new_report_button">Nouveau signalement</string>
     <string name="home_recent_activity">Activité récente</string>
     <string name="home_no_reports_title">Aucun signalement</string>
     <string name="home_no_reports_message">Vous n\'avez encore déposé aucun signalement.</string>
@@ -49,6 +61,12 @@
     <string name="settings_language_english">English</string>
     <string name="settings_language_spanish">Español</string>
     <string name="settings_language_french">Français</string>
+    <string name="settings_more_languages">Plus de langues</string>
+    <string name="settings_more_languages_description">Téléchargez un pack de traduction hors ligne pour une autre langue. L\'anglais, l\'espagnol et le français ci-dessus n\'ont pas besoin de téléchargement.</string>
+    <string name="settings_more_languages_dialog_description">Téléchargé sur l\'appareil pour que la traduction fonctionne sans connexion une fois prête. Appuyez sur une langue pour la télécharger et l\'activer.</string>
+    <string name="settings_more_languages_use_default">Langue par défaut de l\'app (English / Español / Français)</string>
+    <string name="settings_more_languages_download_failed">Impossible de télécharger %1$s. Vérifiez votre connexion et réessayez.</string>
+    <string name="action_done">Terminé</string>
 
     <!-- Onboarding walkthrough -->
     <string name="onboarding_skip">Passer</string>
@@ -60,4 +78,409 @@
     <string name="onboarding_page2_body">Où que vous soyez, une simple secousse ouvre instantanément l\'appareil photo de signalement - pas besoin de chercher l\'application.</string>
     <string name="onboarding_page3_title">Suivez chaque signalement</string>
     <string name="onboarding_page3_body">Suivez les mises à jour de statut, de l\'envoi jusqu\'à la résolution, dans Mes signalements, pour toujours savoir ce qui s\'est passé.</string>
+
+    <!-- Privacy Notice screen (shown once, required, before sign-in/registration) -->
+    <string name="privacy_notice_title">Avant de continuer</string>
+    <string name="privacy_notice_intro">Voici ce que Shake to Report collecte et pourquoi, en langage simple.</string>
+    <string name="privacy_notice_photos_title">Photos et vidéos</string>
+    <string name="privacy_notice_photos_body">Les photos/vidéos des signalements restent uniquement sur votre appareil et sont jointes à votre signalement - nous ne les téléversons jamais vers un service de stockage en ligne.</string>
+    <string name="privacy_notice_location_title">Localisation</string>
+    <string name="privacy_notice_location_body">Votre position GPS est capturée au moment où vous envoyez un signalement, afin qu\'elle puisse être affichée sur la carte et transmise au bon service. Votre position n\'est suivie à aucun autre moment.</string>
+    <string name="privacy_notice_ai_title">Analyse des photos par IA</string>
+    <string name="privacy_notice_ai_body">Les photos des signalements sont envoyées à un modèle d\'IA pour suggérer une catégorie (par exemple, nid-de-poule, lampadaire). Cela ne se produit que pour les photos que vous envoyez dans un signalement.</string>
+    <string name="privacy_notice_account_title">Informations du compte</string>
+    <string name="privacy_notice_account_body">Votre e-mail, votre nom affiché et votre nom d\'utilisateur sont conservés pour identifier votre compte et vos propres signalements. Vous pouvez envoyer un signalement de façon anonyme si vous préférez ne pas y associer votre identité.</string>
+    <string name="privacy_notice_notifications_title">Notifications</string>
+    <string name="privacy_notice_notifications_body">Nous vous notifions des changements de statut de vos propres signalements et des résultats de la classification par IA. Vous pouvez désactiver l\'une ou l\'autre individuellement dans Profil → Notifications.</string>
+    <string name="privacy_notice_footer">Vous pourrez revoir ou modifier la plupart de ces choix plus tard depuis Paramètres et Profil.</string>
+    <string name="privacy_notice_acknowledge">Compris, continuer</string>
+
+    <!-- My Reports screen -->
+    <string name="my_reports_title">Mes signalements</string>
+    <string name="my_reports_retry">Réessayer</string>
+    <string name="my_reports_tab_not_solved">Non résolus (%1$d)</string>
+    <string name="my_reports_tab_solved">Résolus (%1$d)</string>
+    <string name="my_reports_empty_not_solved">Aucun signalement non résolu - tout signalement que vous envoyez apparaîtra ici jusqu\'à sa résolution.</string>
+    <string name="my_reports_empty_solved">Aucun signalement résolu pour l\'instant.</string>
+
+    <!-- Profile screen -->
+    <string name="profile_title">Profil</string>
+    <string name="profile_unnamed_user">Utilisateur sans nom</string>
+    <string name="profile_role_admin">Administrateur</string>
+    <string name="profile_role_citizen">Citoyen</string>
+    <string name="profile_permission_dashboard">Tableau des autorisations</string>
+    <string name="profile_settings">Paramètres</string>
+    <string name="profile_contact_support">Contacter le support</string>
+    <string name="profile_notifications">Notifications</string>
+    <string name="profile_impact_title">Votre impact</string>
+    <string name="profile_impact_reports">Signalements</string>
+    <string name="profile_impact_resolved">Résolus</string>
+    <string name="profile_logout_button">Déconnexion</string>
+    <string name="profile_logout_dialog_title">Se déconnecter ?</string>
+    <string name="profile_logout_dialog_message">Vous devrez vous reconnecter pour déposer ou consulter vos signalements.</string>
+    <string name="profile_logout_dialog_confirm">Se déconnecter</string>
+    <string name="profile_logout_dialog_cancel">Annuler</string>
+
+    <!-- Notification Settings screen -->
+    <string name="notifications_title">Notifications</string>
+    <string name="notifications_status_updates_title">Mises à jour de statut</string>
+    <string name="notifications_status_updates_description">Recevez une notification quand un de vos signalements change de statut (par exemple vers En cours ou Résolu).</string>
+    <string name="notifications_ai_classification_title">Résultats de la classification IA</string>
+    <string name="notifications_ai_classification_description">Recevez une notification indiquant si nous avons pu détecter automatiquement le type de problème sur la photo de votre signalement.</string>
+
+    <!-- Report Detail screen -->
+    <string name="report_detail_title">Détail du signalement</string>
+    <string name="report_detail_edit_action">Modifier le signalement</string>
+    <string name="report_detail_delete_action">Supprimer le signalement</string>
+    <string name="report_detail_delete_dialog_title">Supprimer ce signalement ?</string>
+    <string name="report_detail_delete_dialog_message">Cette action est irréversible.</string>
+    <string name="report_detail_delete_dialog_confirm">Supprimer</string>
+    <string name="report_detail_delete_dialog_cancel">Annuler</string>
+    <string name="report_detail_delete_error_title">Impossible de supprimer le signalement</string>
+    <string name="report_detail_delete_error_ok">OK</string>
+    <string name="report_detail_not_found">Signalement introuvable</string>
+    <string name="report_detail_anonymous_label">Envoyé anonymement</string>
+    <string name="report_detail_ai_review_title">Vérification de l\'IA nécessaire</string>
+    <string name="report_detail_ai_review_message">Notre IA n\'a pas pu classer cette photo. Choisissez vous-même la bonne catégorie et ajoutez une note, puis renvoyez-la.</string>
+    <string name="report_detail_review_and_resubmit">Vérifier et renvoyer</string>
+    <string name="report_detail_location_label">Localisation</string>
+    <string name="report_detail_address_unavailable">Adresse indisponible</string>
+    <string name="report_detail_heading_label">Cap</string>
+    <string name="report_detail_captured_label">Capturé</string>
+    <string name="report_detail_note_label">Note</string>
+    <string name="report_detail_resolution_update_title">Mise à jour de la ville</string>
+    <string name="report_detail_resolution_photo_description">Photo de résolution</string>
+    <string name="report_detail_media_photo_description">Photo du signalement</string>
+    <string name="report_detail_full_media_description">Contenu en taille réelle</string>
+    <string name="report_detail_close_action">Fermer</string>
+    <string name="report_detail_edit_heading">Modifier le signalement</string>
+    <string name="report_detail_describe_issue_label">Décrivez le problème</string>
+    <string name="report_detail_describe_issue_placeholder">ex. Arbre tombé bloquant la route</string>
+    <string name="report_detail_char_count">%1$d/%2$d</string>
+    <string name="report_detail_cancel">Annuler</string>
+    <string name="report_detail_save">Enregistrer</string>
+    <string name="report_detail_admin_workflow_title">Flux de travail administrateur</string>
+    <string name="report_detail_department_label">Service</string>
+    <string name="report_detail_priority_label">Priorité</string>
+    <string name="report_detail_status_label">Statut</string>
+    <string name="report_detail_status_change_prompt">Passage à \"%1$s\" - ajoutez une note de résolution pour le citoyen :</string>
+    <string name="report_detail_resolution_note_label">Note de résolution</string>
+    <string name="report_detail_resolution_photo_attached">Photo de résolution jointe</string>
+    <string name="report_detail_attach_photo_optional">Joindre une photo (facultatif)</string>
+    <string name="report_detail_update_status">Mettre à jour le statut</string>
+    <string name="report_detail_status_submitted">Envoyé</string>
+    <string name="report_detail_status_in_review">En cours d\'examen</string>
+    <string name="report_detail_status_resolved">Résolu</string>
+    <string name="report_detail_incident_summary_title">Fait partie d\'un problème plus large suivi</string>
+    <string name="report_detail_incident_summary_message">%1$d signalements de \"%2$s\" ont été regroupés afin que la ville puisse traiter le problème sous-jacent, pas seulement ce signalement.</string>
+
+    <!-- Report list components (search/filter bar, list item content descriptions) -->
+    <string name="report_list_search_placeholder">Rechercher par adresse ou note</string>
+    <string name="report_list_clear_search">Effacer la recherche</string>
+    <string name="report_list_all_statuses">Tous les statuts</string>
+    <string name="report_list_all_categories">Toutes les catégories</string>
+    <string name="report_list_sort_newest_first">Plus récents d\'abord</string>
+    <string name="report_list_sort_oldest_first">Plus anciens d\'abord</string>
+    <string name="report_list_video_report_description">Signalement vidéo</string>
+    <string name="report_list_anonymous_report_description">Signalement anonyme</string>
+    <string name="report_list_reported_by">Signalé par %1$s</string>
+    <string name="report_list_needs_input_description">Nécessite votre attention</string>
+    <string name="report_list_unassigned_department">Non attribué</string>
+
+    <!-- Status timeline card -->
+    <string name="status_timeline_title">Historique des statuts</string>
+    <string name="status_timeline_submitted">Signalement envoyé</string>
+    <string name="status_timeline_in_review">En cours d\'examen par la ville</string>
+    <string name="status_timeline_resolved">Résolu</string>
+
+    <!-- Capture screen -->
+    <string name="capture_title">Signaler un problème</string>
+    <string name="capture_camera_permission_title">Accès à la caméra requis</string>
+    <string name="capture_camera_permission_body">Shake to Report utilise votre caméra pour capturer une photo du problème que vous signalez.</string>
+    <string name="capture_location_permission_title">Accès à la localisation requis</string>
+    <string name="capture_location_permission_body">Shake to Report associe à chaque signalement sa position GPS afin que le problème puisse être localisé et résolu.</string>
+    <string name="capture_analyzing_photo_label">Analyse de la photo</string>
+    <string name="capture_analyzing_photo_detail">Détection de la catégorie du problème et lecture de votre position...</string>
+    <string name="capture_preparing_form_label">Préparation</string>
+    <string name="capture_preparing_form_detail">Lecture de votre position actuelle...</string>
+    <string name="capture_submitting_label">Envoi du signalement</string>
+    <string name="capture_submitting_detail">Envoi de votre signalement à la ville - presque terminé.</string>
+    <string name="capture_duplicate_dialog_title">Signalement similaire à proximité</string>
+    <string name="capture_duplicate_dialog_message">Un signalement similaire de %1$s a été déposé récemment à proximité. Le consulter à la place, ou envoyer quand même ?</string>
+    <string name="capture_duplicate_submit_anyway">Envoyer quand même</string>
+    <string name="capture_duplicate_view_existing">Voir l\'existant</string>
+    <string name="capture_chooser_no_media_title">Pas encore de photo ni de vidéo</string>
+    <string name="capture_chooser_no_media_message">Prenez une photo ou filmez une vidéo du problème, ou choisissez-en une dans votre galerie.</string>
+    <string name="capture_take_photo">Prendre une photo</string>
+    <string name="capture_choose_from_gallery">Choisir dans la galerie</string>
+    <string name="capture_record_video">Filmer une vidéo</string>
+    <string name="capture_choose_video_from_gallery">Choisir une vidéo dans la galerie</string>
+    <string name="capture_video_ai_note">Remarque : les signalements vidéo nécessitent que vous choisissiez vous-même la catégorie - l\'IA ne peut pas classer les vidéos.</string>
+    <string name="capture_review_video_title">Vérifiez votre vidéo</string>
+    <string name="capture_review_media_message">Recommencez si le problème n\'est pas clairement visible, ou confirmez pour continuer.</string>
+    <string name="capture_retake">Reprendre</string>
+    <string name="capture_confirm">Confirmer</string>
+    <string name="capture_photo_content_description">Photo capturée</string>
+    <string name="capture_annotation_hint">Dessinez pour marquer le problème (facultatif)</string>
+    <string name="capture_undo_stroke">Annuler le dernier trait</string>
+    <string name="capture_clear_annotation">Effacer l\'annotation</string>
+    <string name="capture_review_photo_title">Vérifiez votre photo</string>
+    <string name="capture_metadata_location_label">Localisation</string>
+    <string name="capture_metadata_location_unavailable">Indisponible</string>
+    <string name="capture_metadata_heading_label">Cap</string>
+    <string name="capture_metadata_captured_label">Capturé</string>
+    <string name="capture_category_title">Catégorie</string>
+    <string name="capture_category_ai_hint">Notre IA détectera automatiquement le type de problème après votre envoi.</string>
+    <string name="capture_choose_manually">Choisir manuellement</string>
+    <string name="capture_category_video_required_hint">L\'IA ne peut pas classer les vidéos - veuillez choisir vous-même la catégorie.</string>
+    <string name="capture_category_ai_recheck_hint">L\'IA vérifiera quand même après votre envoi - en cas de désaccord, il vous sera demandé de revoir votre choix.</string>
+    <string name="capture_describe_issue_label">Décrivez le problème</string>
+    <string name="capture_describe_issue_placeholder">ex. Arbre tombé bloquant la route</string>
+    <string name="capture_char_count">%1$d/%2$d</string>
+    <string name="capture_note_label">Note (facultatif)</string>
+    <string name="capture_report_details_title">Détails du signalement</string>
+    <string name="capture_anonymous_title">Signaler anonymement</string>
+    <string name="capture_anonymous_description">Votre identité ne sera associée à ce signalement en aucune façon - même pas pour nous. Vous ne pourrez pas le modifier ni le supprimer par la suite, car aucun propriétaire ne sera enregistré.</string>
+    <string name="capture_submit">Envoyer</string>
+    <string name="capture_video_captured_label">Vidéo capturée</string>
+    <string name="capture_photo_captured_label">Photo capturée</string>
+    <string name="capture_tap_to_view_full_size">Appuyez pour voir en taille réelle</string>
+    <string name="capture_close_action">Fermer</string>
+    <string name="capture_add_photos_title">Ajouter des photos / vidéos</string>
+    <string name="capture_add_more">Ajouter plus</string>
+    <string name="capture_remove_photo">Supprimer la photo</string>
+
+    <!-- Chat screen -->
+    <string name="chat_title">Assistant d\'aide</string>
+    <string name="chat_input_placeholder">Posez une question sur le signalement d\'un problème...</string>
+    <string name="chat_send_action">Envoyer</string>
+    <string name="chat_empty_title">Posez-moi vos questions sur le signalement d\'un problème</string>
+    <string name="chat_empty_message">Comment signaler un nid-de-poule ? Que signifie \"En cours d\'examen\" ? Qu\'en est-il de mon dernier signalement ? Je ne peux répondre qu\'aux questions sur cette application.</string>
+    <string name="chat_new_chat_action">Nouvelle discussion</string>
+    <string name="chat_new_chat_dialog_title">Démarrer une nouvelle discussion ?</string>
+    <string name="chat_new_chat_dialog_message">Cela mettra fin à la conversation en cours. Elle ne sera pas enregistrée.</string>
+    <string name="chat_new_chat_dialog_confirm">Démarrer</string>
+    <string name="chat_new_chat_dialog_cancel">Annuler</string>
+
+    <!-- Contact Support screen -->
+    <string name="contact_support_title">Contacter le support</string>
+    <string name="contact_support_intro">Vous avez une question ou un problème avec l\'application ? Envoyez un message directement à un administrateur.</string>
+    <string name="contact_support_message_label">Votre message</string>
+    <string name="contact_support_char_count">%1$d/%2$d</string>
+    <string name="contact_support_send">Envoyer</string>
+    <string name="contact_support_your_messages">Vos conversations</string>
+    <string name="contact_support_no_tickets">Aucune conversation pour l\'instant - envoyez un message ci-dessus pour en commencer une.</string>
+    <string name="contact_support_status_open">Ouverte</string>
+    <string name="contact_support_status_closed">Fermée</string>
+    <string name="contact_support_preview_from_admin">Support : %1$s</string>
+
+    <!-- Support Thread screen (the open chat for one ticket) -->
+    <string name="support_thread_title">Conversation</string>
+    <string name="support_thread_close_action">Fermer</string>
+    <string name="support_thread_input_placeholder">Écrivez un message…</string>
+    <string name="support_thread_send_action">Envoyer</string>
+
+    <!-- Permission explainer & dashboard screens -->
+    <string name="permission_explainer_continue">Continuer</string>
+
+    <string name="startup_permission_camera_title">Autoriser l\'accès à l\'appareil photo</string>
+    <string name="startup_permission_camera_body">Shake to Report a besoin de votre appareil photo pour photographier le problème signalé.</string>
+    <string name="startup_permission_location_title">Autoriser l\'accès à la localisation</string>
+    <string name="startup_permission_location_body">La localisation associe chaque signalement à son emplacement exact, afin qu\'il puisse être trouvé et résolu.</string>
+    <string name="startup_permission_notifications_title">Autoriser les notifications</string>
+    <string name="startup_permission_notifications_body">Nous vous informerons dès qu\'un signalement que vous avez envoyé est examiné, mis à jour ou résolu.</string>
+    <string name="startup_permission_denied_body">L\'accès à %1$s est désactivé pour cette application. Vous pouvez l\'autoriser dans les Paramètres - nous vérifierons à nouveau la prochaine fois que vous ouvrirez l\'application.</string>
+    <string name="startup_permission_open_settings">Ouvrir les Paramètres</string>
+
+    <string name="app_lock_setup_create_title">Créez un code PIN</string>
+    <string name="app_lock_setup_confirm_title">Confirmez votre code PIN</string>
+    <string name="app_lock_setup_subtitle">Vous l\'utiliserez à la place de votre mot de passe pour ouvrir l\'application.</string>
+    <string name="app_lock_setup_biometric_title">Utiliser aussi l\'empreinte ou le visage ?</string>
+    <string name="app_lock_setup_biometric_body">Déverrouillez encore plus vite la prochaine fois - votre code PIN reste disponible en secours.</string>
+    <string name="app_lock_setup_biometric_enable">Activer</string>
+    <string name="app_lock_setup_biometric_skip">Ignorer</string>
+    <string name="app_lock_title">Entrez votre code PIN</string>
+    <string name="app_lock_biometric_title">Déverrouiller</string>
+    <string name="app_lock_biometric_subtitle">Utilisez votre empreinte ou votre visage pour déverrouiller</string>
+    <string name="app_lock_use_pin">Utiliser le code PIN</string>
+    <string name="app_lock_sign_out_instead">Se déconnecter à la place</string>
+    <string name="permission_dashboard_title">Tableau des autorisations</string>
+    <string name="permission_dashboard_granted">Accordée</string>
+    <string name="permission_dashboard_not_granted">Non accordée</string>
+    <string name="permission_dashboard_open_settings">Ouvrir les paramètres</string>
+    <string name="permission_dashboard_grant">Accorder</string>
+
+    <!-- Forgot Credentials screen -->
+    <string name="forgot_credentials_title">Nom d\'utilisateur ou mot de passe oublié ?</string>
+    <string name="forgot_credentials_intro">Saisissez l\'e-mail avec lequel vous vous êtes inscrit. Vous pouvez rechercher votre nom d\'utilisateur, demander un e-mail de réinitialisation du mot de passe, ou les deux.</string>
+    <string name="forgot_credentials_email_label">E-mail</string>
+    <string name="forgot_credentials_find_username">Trouver mon nom d\'utilisateur</string>
+    <string name="forgot_credentials_username_found_label">Votre nom d\'utilisateur est :</string>
+    <string name="forgot_credentials_username_not_found">Aucun nom d\'utilisateur trouvé pour cet e-mail. Cela peut arriver si le compte a été créé avant l\'existence de la connexion par nom d\'utilisateur, ou si l\'e-mail ne correspond à aucun compte - vous pouvez toujours vous connecter directement avec votre e-mail.</string>
+    <string name="forgot_credentials_sending">Envoi en cours…</string>
+    <string name="forgot_credentials_send_reset_email">Envoyer l\'e-mail de réinitialisation du mot de passe</string>
+    <string name="forgot_credentials_reset_email_sent">Si cet e-mail correspond à un compte, un lien de réinitialisation du mot de passe lui a été envoyé.</string>
+
+    <!-- Auth: Register screen (remaining literals) -->
+    <string name="register_username_label">Nom d\'utilisateur</string>
+    <string name="register_username_helper">Lettres, chiffres et tirets bas uniquement - utilisé pour se connecter à la place de votre e-mail.</string>
+
+    <!-- Auth: Login screen (remaining literals) -->
+    <string name="login_admin_toggle">Se connecter en tant qu\'administrateur</string>
+    <string name="login_biometric_dialog_title">Activer la connexion biométrique ?</string>
+    <string name="login_biometric_dialog_message">La prochaine fois, connectez-vous instantanément avec votre empreinte ou votre visage au lieu de saisir votre mot de passe.</string>
+    <string name="login_biometric_enable">Activer</string>
+    <string name="login_biometric_not_now">Pas maintenant</string>
+    <string name="login_biometric_never">Ne plus demander (activable plus tard dans les Paramètres)</string>
+    <string name="login_biometric_enable_challenge_title">Confirmez que c\'est vous</string>
+    <string name="login_biometric_enable_challenge_subtitle">Utilisez votre empreinte ou votre visage pour activer la connexion biométrique</string>
+    <string name="login_biometric_enable_challenge_cancel">Annuler</string>
+    <string name="login_forgot_credentials">Nom d\'utilisateur ou mot de passe oublié ?</string>
+    <string name="login_biometric_sign_in">Se connecter avec la biométrie</string>
+
+    <!-- Admin Dashboard screen -->
+    <string name="admin_dashboard_title">Tableau de bord administrateur</string>
+    <string name="admin_dashboard_by_status">Par statut</string>
+    <string name="admin_dashboard_by_category">Par catégorie</string>
+    <string name="admin_dashboard_by_department">Par service</string>
+    <string name="admin_dashboard_unassigned">Non attribué</string>
+    <string name="admin_dashboard_active_incidents">Incidents actifs (%1$d)</string>
+    <string name="admin_dashboard_view_all">Tout voir</string>
+    <string name="admin_dashboard_active_incidents_hint">Signalements liés regroupés en un seul problème suivi - le point d\'entrée pour gérer le problème sous-jacent, pas seulement des signalements individuels.</string>
+    <string name="admin_dashboard_no_active_incidents">Aucun incident actif pour le moment.</string>
+    <string name="admin_dashboard_high_risk_areas">Zones à risque élevé (%1$d)</string>
+    <string name="admin_dashboard_high_risk_hint">Zones à risque prévu élevé selon les données historiques des signalements - consultez Zones à risque pour la liste complète classée, y compris les zones sans données suffisantes pour l\'instant.</string>
+    <string name="admin_dashboard_no_high_risk_areas">Aucune zone à risque élevé détectée pour le moment.</string>
+    <string name="admin_dashboard_needs_attention">Nécessite votre attention</string>
+    <string name="admin_dashboard_needs_attention_hint">Signalements non attribués, urgents ou signalés par l\'IA qui ne sont pas encore résolus - les signalements les plus susceptibles de nécessiter votre action ensuite.</string>
+    <string name="admin_dashboard_nothing_needs_attention">Rien ne nécessite votre attention pour le moment.</string>
+    <string name="admin_dashboard_total_reports">Total des signalements</string>
+    <string name="admin_dashboard_awaiting_action">En attente d\'action</string>
+    <string name="admin_dashboard_resolved">Résolus</string>
+    <string name="admin_dashboard_status_submitted">Envoyé</string>
+    <string name="admin_dashboard_status_in_review">En cours d\'examen</string>
+    <string name="admin_dashboard_status_resolved">Résolu</string>
+
+    <!-- Admin Reports screen -->
+    <string name="admin_reports_title">Tous les signalements (Admin)</string>
+    <string name="admin_reports_retry">Réessayer</string>
+    <string name="admin_reports_no_matching_title">Aucun signalement correspondant</string>
+    <string name="admin_reports_no_matching_message">Aucun signalement ne correspond à votre recherche ou vos filtres. Essayez de les ajuster.</string>
+    <string name="admin_reports_empty">Aucun signalement pour l\'instant.</string>
+
+    <!-- Admin Incidents screen -->
+    <string name="admin_incidents_title">Incidents</string>
+    <string name="admin_incidents_dismiss">Ignorer</string>
+    <string name="admin_incidents_show_closed_dismissed">Afficher fermés et ignorés</string>
+    <string name="admin_incidents_empty">Aucun incident détecté pour l\'instant. Les incidents sont créés automatiquement lorsque plusieurs signalements semblent décrire le même problème sous-jacent.</string>
+    <string name="admin_incidents_report_count">%1$d signalements</string>
+
+    <!-- Admin Risk Areas screen -->
+    <string name="admin_risk_areas_title">Zones à risque</string>
+    <string name="admin_risk_areas_intro">Zones classées par risque d\'infrastructure prévu, calculé à partir des données historiques des signalements.</string>
+    <string name="admin_risk_areas_show_insufficient">Afficher les zones avec données insuffisantes</string>
+    <string name="admin_risk_areas_empty">Aucune donnée de risque pour l\'instant. Les scores de risque sont calculés périodiquement une fois que suffisamment de signalements existent dans une zone/catégorie pour dire quelque chose de significatif.</string>
+    <string name="admin_risk_areas_insufficient_data">Données insuffisantes</string>
+    <string name="admin_risk_areas_report_count">%1$d signalements</string>
+    <string name="admin_risk_areas_unresolved_count">%1$d non résolus</string>
+    <string name="admin_risk_areas_recurring">Récurrent</string>
+    <string name="admin_risk_areas_no_data">Aucune donnée</string>
+
+    <!-- Admin Support Messages screen -->
+    <string name="admin_support_title">Messages de support</string>
+    <string name="admin_support_resolved_only">Résolus uniquement</string>
+    <string name="admin_support_empty">Aucun message de support pour l\'instant.</string>
+    <string name="admin_support_anonymous_user">Anonyme</string>
+    <string name="admin_support_status_resolved">Résolu</string>
+    <string name="admin_support_status_open">Ouvert</string>
+    <string name="admin_support_delete_action">Supprimer la conversation</string>
+    <string name="admin_support_delete_dialog_title">Supprimer cette conversation ?</string>
+    <string name="admin_support_delete_dialog_message">Cela supprimera définitivement toute la conversation avec ce citoyen, y compris tous les messages. Cette action est irréversible.</string>
+    <string name="admin_support_delete_dialog_confirm">Supprimer</string>
+    <string name="admin_support_delete_dialog_cancel">Annuler</string>
+    <string name="admin_support_re_report">Re : %1$s</string>
+    <string name="admin_support_your_reply">Votre réponse</string>
+    <string name="admin_support_reply_label">Réponse</string>
+    <string name="admin_support_cancel">Annuler</string>
+    <string name="admin_support_send_reply_resolve">Envoyer la réponse et résoudre</string>
+    <string name="admin_support_reply">Répondre</string>
+    <string name="admin_support_unread_count">%1$d nouveau(x)</string>
+
+    <!-- Incident Detail screen -->
+    <string name="incident_detail_title">Incident</string>
+    <string name="incident_detail_not_found">Incident introuvable</string>
+    <string name="incident_detail_member_reports_count">%1$d signalements membres</string>
+    <string name="incident_detail_location_unavailable">Localisation indisponible</string>
+    <string name="incident_detail_priority_score_title">Score de priorité</string>
+    <string name="incident_detail_priority_score_value">%1$d/100</string>
+    <string name="incident_detail_priority_not_calculated">Pas encore calculé - sera mis à jour après le prochain changement de statut/gravité.</string>
+    <string name="incident_detail_priority_points">+%1$d</string>
+    <string name="incident_detail_validation_title">Validation</string>
+    <string name="incident_detail_validation_pending">Pas encore examiné par un administrateur.</string>
+    <string name="incident_detail_validation_validated">Validé - confirmé comme incident réel.</string>
+    <string name="incident_detail_validation_rejected">Rejeté - non traité comme un incident authentique.</string>
+    <string name="incident_detail_validate">Valider</string>
+    <string name="incident_detail_reject">Rejeter</string>
+    <string name="incident_detail_status_title">Statut</string>
+    <string name="incident_detail_severity_title">Gravité</string>
+    <string name="incident_detail_department_title">Service</string>
+    <string name="incident_detail_validation_note_title">Note de validation</string>
+    <string name="incident_detail_validation_note_hint">Pourquoi cet incident a été confirmé, rejeté ou est encore en cours de validation - visible dans l\'historique d\'audit.</string>
+    <string name="incident_detail_save_note">Enregistrer la note</string>
+    <string name="incident_detail_member_reports_title">Signalements membres (%1$d)</string>
+    <string name="incident_detail_merge_another">Fusionner un autre signalement</string>
+    <string name="incident_detail_unmerge">Dissocier</string>
+    <string name="incident_detail_nearby_reports_title">Signalements à proximité non encore inclus dans cet incident</string>
+    <string name="incident_detail_no_nearby_reports">Aucun autre signalement à proximité de cette catégorie trouvé.</string>
+    <string name="incident_detail_merge_into">Fusionner dans cet incident</string>
+
+    <!-- Risk Area Detail screen -->
+    <string name="risk_area_detail_title">Zone à risque</string>
+    <string name="risk_area_detail_not_found">Données de risque introuvables</string>
+    <string name="risk_area_detail_insufficient_data_title">Données insuffisantes</string>
+    <string name="risk_area_detail_insufficient_data_message">Pas assez de signalements historiques dans cette zone/catégorie pour calculer un score de risque significatif pour l\'instant.</string>
+    <string name="risk_area_detail_score_title">Score de risque</string>
+    <string name="risk_area_detail_score_value">%1$d/100 · %2$s</string>
+    <string name="risk_area_detail_points">+%1$d</string>
+    <string name="risk_area_detail_recommendation_title">Recommandation</string>
+    <string name="risk_area_detail_recurring_note">Marqué comme récurrent - de nouveaux signalements sont apparus ici après une résolution précédente.</string>
+    <string name="risk_area_detail_contributing_reports">Signalements contributeurs (%1$d)</string>
+    <string name="risk_area_detail_trend_title">Tendance dans le temps</string>
+
+    <!-- Work Order components -->
+    <string name="work_orders_title">Ordres de travail (%1$d)</string>
+    <string name="work_orders_new">Nouvel ordre de travail</string>
+    <string name="work_orders_empty">Aucun ordre de travail pour l\'instant - créez-en un pour envoyer une équipe effectuer la réparation.</string>
+    <string name="work_orders_unassigned">Non attribué</string>
+    <string name="work_orders_department_team">%1$s · %2$s</string>
+    <string name="work_orders_created">Créé le %1$s</string>
+    <string name="work_orders_dialog_title">Nouvel ordre de travail</string>
+    <string name="work_orders_department_label">Service</string>
+    <string name="work_orders_assigned_team_label">Équipe/agent assigné</string>
+    <string name="work_orders_priority_label">Priorité</string>
+    <string name="work_orders_create">Créer</string>
+    <string name="work_orders_cancel">Annuler</string>
+
+    <!-- Audit History component -->
+    <string name="audit_history_title">Historique d\'audit (%1$d)</string>
+    <string name="audit_history_empty">Aucune action enregistrée pour l\'instant.</string>
+    <string name="audit_history_value_placeholder">—</string>
+    <string name="audit_history_value_change">%1$s → %2$s</string>
+
+    <!-- StatusBadge component (shared pill badge, distinct from each screen's own status labels/filters) -->
+    <string name="status_badge_pending">En attente</string>
+    <string name="status_badge_in_progress">En cours</string>
+    <string name="status_badge_resolved">Résolu</string>
+
+    <!-- Promote Admin screen -->
+    <string name="promote_admin_title">Promouvoir administrateur</string>
+    <string name="promote_admin_nav_label">Promouvoir administrateur</string>
+    <string name="promote_admin_intro">Accordez un accès administrateur à un autre compte. Cette personne verra les onglets d\'administration à sa prochaine connexion.</string>
+    <string name="promote_admin_identifier_label">E-mail ou nom d\'utilisateur</string>
+    <string name="promote_admin_search_placeholder">Rechercher par nom, utilisateur ou e-mail</string>
+    <string name="promote_admin_no_results">Aucun compte ne correspond à votre recherche.</string>
+    <string name="promote_admin_role_admin_badge">Administrateur</string>
+    <string name="promote_admin_button">Promouvoir</string>
+    <string name="promote_admin_already_admin">%1$s est déjà administrateur.</string>
+    <string name="promote_admin_success">%1$s est maintenant administrateur.</string>
 </resources>

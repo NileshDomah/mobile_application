@@ -13,18 +13,22 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.king.mob_app_assignment.R
 import com.king.mob_app_assignment.ui.components.PrimaryActionButton
+import com.king.mob_app_assignment.ui.theme.translatedStringResource
 
 @Composable
 fun PermissionExplainerScreen(
     icon: ImageVector,
     title: String,
     body: String,
-    continueButtonLabel: String = "Continue",
+    continueButtonLabel: String? = null,
     onContinue: () -> Unit,
 ) {
+    val resolvedContinueLabel = continueButtonLabel ?: translatedStringResource(R.string.permission_explainer_continue)
     Scaffold { padding ->
         Column(
             modifier = Modifier
@@ -55,7 +59,7 @@ fun PermissionExplainerScreen(
                 modifier = Modifier.padding(top = 12.dp, bottom = 32.dp),
             )
             PrimaryActionButton(
-                text = continueButtonLabel,
+                text = resolvedContinueLabel,
                 onClick = onContinue,
             )
         }

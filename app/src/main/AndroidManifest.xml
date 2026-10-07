@@ -17,6 +17,19 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- Lets BootShakeReceiver restart the background shake listener after a reboot, if the
+         user had "shake in background" turned on - without this, that setting would silently
+         stop being true every time the device restarts. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Normal (auto-granted, no runtime prompt) permission required since Android 12 (API 31)
+         to register an accelerometer listener above 200 Hz - SENSOR_DELAY_GAME (the foreground
+         shake listener's requested rate, see ShakeDetector) sits right at that boundary and gets
+         SILENTLY capped to a much slower delivery rate without this permission declared, on a
+         device/OS build that actually enforces the cap. No runtime error or crash results - the
+         accelerometer just delivers events far less often than requested, which can be enough on
+         its own to make a real, deliberate shake never accumulate the required reversals within
+         ShakeDetector's rolling window before it goes stale. -->
+    <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
 
     <uses-feature
         android:name="android.hardware.camera"
@@ -52,6 +65,46 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Continuously listens for a shake gesture (accelerometer) to let the user file a civic issue report without opening the app first." />
         </service>
+
+        <!-- See BootShakeReceiver's own doc comment - restarts ShakeBackgroundService after a
+             reboot if the user had background shake enabled, since a foreground Service does not
+             survive a reboot on its own. -->
+        <receiver
+            android:name=".sensor.BootShakeReceiver"
+            android:exported="true"
+            android:permission="android.permission.RECEIVE_BOOT_COMPLETED">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Receives real FCM push notifications (sendReportStatusPush Cloud Function) even
+             when the app process is backgrounded or fully killed - see FcmTokenService's doc. -->
+        <service
+            android:name=".util.FcmTokenService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- Default notification channel FCM uses for a notification-payload push when the app
+             is backgrounded/killed and no channel id is specified in the payload - matches
+             NotificationHelper's own citizen-facing channel so a push and a local status
+             notification land in the same channel from the user's perspective. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="report_status_updates" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_stat_notification" />
+
+        <!-- Maps SDK for Android reads its key from here at runtime - the actual value comes
+             from local.properties' MAPS_API_KEY via the manifestPlaceholders entry in
+             build.gradle.kts, never hardcoded in this file. -->
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="${MAPS_API_KEY}" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

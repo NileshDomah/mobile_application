@@ -6,14 +6,25 @@ import android.app.NotificationManager
 import android.os.Build
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
+import androidx.work.Constraints
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
+import com.king.mob_app_assignment.ai.RiskRefreshWorker
 import com.king.mob_app_assignment.data.repository.AuthRepository
 import com.king.mob_app_assignment.data.repository.ReportRepository
 import com.king.mob_app_assignment.sensor.ShakeBackgroundService
+import com.king.mob_app_assignment.sensor.startShakeService
+import com.king.mob_app_assignment.util.AdminSupportNotifier
 import com.king.mob_app_assignment.util.ConnectivityObserver
 import com.king.mob_app_assignment.util.CrashReporter
+import com.king.mob_app_assignment.util.ShakePreferences
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 
 @HiltAndroidApp
@@ -24,6 +35,8 @@ class MobAppAssignment : Application(), Configuration.Provider {
     @Inject lateinit var authRepository: AuthRepository
     @Inject lateinit var appScope: CoroutineScope
     @Inject lateinit var workerFactory: HiltWorkerFactory
+    @Inject lateinit var adminSupportNotifier: AdminSupportNotifier
+    @Inject lateinit var shakePreferences: ShakePreferences
 
     // Lets ClassificationWorker (and any future Worker) receive its dependencies via Hilt's
     // @HiltWorker/@AssistedInject instead of manually looking them up - requires disabling
@@ -57,6 +70,43 @@ class MobAppAssignment : Application(), Configuration.Provider {
                 CrashReporter.setUserId(user?.uid)
             }
         }
+
+        enqueueRiskRefreshWork()
+        adminSupportNotifier.start(appScope)
+        restartBackgroundShakeIfEnabled()
+    }
+
+    // Runs on every fresh process creation - covers reboot (paired with BootShakeReceiver, which
+    // handles the case where the process isn't created again until the user opens the app) and,
+    // more importantly, the case a plain BOOT_COMPLETED receiver can't: the user swiping the app
+    // away from Recents kills this foreground service along with the rest of the process, and
+    // nothing else would ever tell it to come back - simply reopening the app (which recreates
+    // this Application) is what should re-arm it, matching "shake still works once the app is
+    // closed" rather than only "until the app is swiped away." startForegroundService is itself
+    // idempotent-safe to call on an already-running service (it's just a redundant onStartCommand).
+    private fun restartBackgroundShakeIfEnabled() {
+        appScope.launch {
+            if (shakePreferences.backgroundShakeEnabledFlow.first()) {
+                startShakeService(this@MobAppAssignment)
+            }
+        }
+    }
+
+    // Predictive risk scoring is recomputed on a schedule, not per-report (unlike incident
+    // clustering) - a single new report shouldn't trigger a full recompute of every area's risk
+    // bucket. enqueueUniquePeriodicWork with KEEP means this is a no-op on every app start after
+    // the first - WorkManager already has the periodic request registered and honors its own
+    // schedule. Network-required (unlike clustering) since a run reads the full reports
+    // collection, not one already-cached document.
+    private fun enqueueRiskRefreshWork() {
+        val request = PeriodicWorkRequestBuilder<RiskRefreshWorker>(6, TimeUnit.HOURS)
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .build()
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+            RiskRefreshWorker.UNIQUE_WORK_NAME,
+            ExistingPeriodicWorkPolicy.KEEP,
+            request,
+        )
     }
 
     private fun createBackgroundShakeNotificationChannel() {

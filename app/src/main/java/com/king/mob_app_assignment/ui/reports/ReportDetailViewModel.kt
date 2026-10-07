@@ -4,8 +4,10 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.king.mob_app_assignment.data.repository.AuthRepository
+import com.king.mob_app_assignment.data.repository.IncidentRepository
 import com.king.mob_app_assignment.data.repository.ReportRepository
 import com.king.mob_app_assignment.domain.model.Department
+import com.king.mob_app_assignment.domain.model.Incident
 import com.king.mob_app_assignment.domain.model.Report
 import com.king.mob_app_assignment.domain.model.ReportCategory
 import com.king.mob_app_assignment.domain.model.ReportPriority
@@ -17,6 +19,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -34,6 +38,11 @@ data class ReportDetailUiState(
     val isDeleted: Boolean = false,
     val isUpdatingStatus: Boolean = false,
     val deleteErrorMessage: String? = null,
+    // Non-null only when this report has been clustered into an incident - citizens see a small
+    // "this is part of a wider tracked issue" card, admins get a link into the full incident
+    // detail. Most reports most of the time have no incident, so this staying null is the common
+    // case, not an error state.
+    val incident: Incident? = null,
 )
 
 @HiltViewModel
@@ -41,6 +50,7 @@ class ReportDetailViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val reportRepository: ReportRepository,
     private val authRepository: AuthRepository,
+    private val incidentRepository: IncidentRepository,
 ) : ViewModel() {
 
     private val reportId: String = checkNotNull(savedStateHandle["reportId"])
@@ -63,12 +73,20 @@ class ReportDetailViewModel @Inject constructor(
         val deleteErrorMessage: String? = null,
     )
 
+    private val reportFlow = reportRepository.getReportById(reportId).catch { emit(null) }
+
+    private val incidentFlow = reportFlow.flatMapLatest { report ->
+        val incidentId = report?.incidentId.orEmpty()
+        if (incidentId.isBlank()) flowOf(null) else incidentRepository.getIncidentById(incidentId)
+    }.catch { emit(null) }
+
     val uiState: StateFlow<ReportDetailUiState> = combine(
-        reportRepository.getReportById(reportId).catch { emit(null) },
+        reportFlow,
         isAdminFlow,
         currentUidFlow,
         editStateFlow,
-    ) { report, isAdmin, currentUid, editState ->
+        incidentFlow,
+    ) { report, isAdmin, currentUid, editState, incident ->
         ReportDetailUiState(
             report = report,
             isAdmin = isAdmin,
@@ -80,6 +98,7 @@ class ReportDetailViewModel @Inject constructor(
             isDeleted = editState.isDeleted,
             isUpdatingStatus = editState.isUpdatingStatus,
             deleteErrorMessage = editState.deleteErrorMessage,
+            incident = incident,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ReportDetailUiState())
 
@@ -130,13 +149,6 @@ class ReportDetailViewModel @Inject constructor(
                 isSaving = false,
                 isEditing = result.isFailure,
             )
-        }
-    }
-
-    fun toggleUpvote() {
-        val uid = uiState.value.currentUid ?: return
-        viewModelScope.launch {
-            reportRepository.toggleUpvote(reportId, uid)
         }
     }
 

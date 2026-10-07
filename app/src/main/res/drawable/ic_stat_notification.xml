@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Status-bar notification icon - a flat white silhouette on transparent, per Android's
+    notification icon guidelines (a full-color icon like ic_app_logo.xml renders as a solid
+    white blob/square in the status bar on API 21+, since the system re-tints notification
+    icons to a single color). Reuses ic_app_logo's phone+shake-motion motif (2026-08-31
+    redesign) so the notification is still visually tied to the app's brand, just flattened
+    to one shape/color as required - keep this in sync if ic_app_logo.xml's phone shape is
+    ever redrawn again.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120"
+    android:tint="#FFFFFF">
+
+    <!-- Phone body silhouette, screen cut out as a hole via evenOdd fill (same technique the
+         previous shield+pin version used for its own cutout). -->
+    <path
+        android:fillColor="#FF000000"
+        android:fillType="evenOdd"
+        android:pathData="M42,18
+            h36
+            a10,10 0 0,1 10,10
+            v64
+            a10,10 0 0,1 -10,10
+            h-36
+            a10,10 0 0,1 -10,-10
+            v-64
+            a10,10 0 0,1 10,-10
+            Z
+            M46,26
+            h28
+            a4,4 0 0,1 4,4
+            v56
+            a4,4 0 0,1 -4,4
+            h-28
+            a4,4 0 0,1 -4,-4
+            v-56
+            a4,4 0 0,1 4,-4
+            Z" />
+
+    <!-- Shake-motion arcs either side (one per side, single tier - kept simpler than the
+         full-color logo's two-tier version, since a status-bar icon reads better with less
+         fine detail at 24dp). -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:pathData="M18,35 A28,28 0 0,0 18,85" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:pathData="M102,35 A28,28 0 0,1 102,85" />
+</vector>

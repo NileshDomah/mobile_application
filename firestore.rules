@@ -7,13 +7,81 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    // ROOT CAUSE FOUND 2026-09-10 for user-reported "can't login now it says missing or
+    // insufficient permissions" (right at login, before app-lock/PIN even shows). isAdmin() used
+    // to call get(.../users/{uid}) unconditionally the instant isSignedIn() was true - but
+    // Firestore's `||`/`&&` operators in security rules are NOT guaranteed to short-circuit
+    // around a get() that itself fails, and get() on a document that DOESN'T EXIST throws inside
+    // a rule (unlike a normal Firestore client read, which just returns a non-existent snapshot).
+    // Every /users/{userId} get/list rule below is written as
+    // `request.auth.uid == userId || isAdmin()` - so any account whose OWN /users/{uid} document
+    // was missing (a partial/incomplete registration, or a doc deleted after the fact) would have
+    // isAdmin() throw and take down the WHOLE boolean expression with it, denying even a citizen
+    // reading their own document - even though the first half of that `||` (a plain uid equality
+    // check, no get() involved) would have been true on its own and needed no fallback at all.
+    // Guarding with exists() first means isAdmin() now safely evaluates to false for a
+    // non-existent document instead of throwing, so the OTHER half of every `||` it's used in can
+    // still correctly grant access on its own merits.
     function isAdmin() {
       return isSignedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'ADMIN';
     }
 
+    // Username -> uid lookup, used at LOGIN TIME before the user is signed in (they're typing a
+    // username instead of an email precisely because they haven't authenticated yet) - so read
+    // must be open to anyone, not gated behind isSignedIn(). This only ever exposes a uid for a
+    // given username, never a password/email directly - still, this does mean anyone can
+    // enumerate whether a given username exists, a low-severity information leak accepted for
+    // this coursework project (see PLACEHOLDERS_TODO.csv; a production system would put this
+    // whole lookup behind a Cloud Function instead of a direct client read).
+    match /usernames/{username} {
+      allow read: if true;
+      // Create only via the transaction in AuthRepositoryImpl.register() - this rule doesn't
+      // (and structurally can't, in rules alone) enforce the transactional
+      // check-then-reserve atomicity itself, only that the write shape is correct; the
+      // transaction is what actually prevents a race between two registrations on one username.
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // Email -> uid lookup, the reverse of /usernames/{username} above - lets
+    // resolveEmailToUsername() (the "forgot my username" flow) look up a single doc by a
+    // caller-supplied email BEFORE they're signed in, same reasoning/precedent as /usernames.
+    // Only ever created for accounts registered after this collection was introduced - accounts
+    // registered earlier have no matching doc here (see PLACEHOLDERS_TODO.csv).
+    match /emails/{email} {
+      allow read: if true;
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // Minimal pre-auth-readable lookup doc (email + username ONLY - see
+    // FirestoreConstants.LOGIN_LOOKUP_COLLECTION's doc). This is what resolveUsernameToEmail()/
+    // resolveEmailToUsername() actually read now, instead of the full /users/{uid} document -
+    // narrows what a pre-auth caller who already has/guesses a uid can learn from "an entire
+    // profile including role" down to "just email and username," neither sensitive alone.
+    // Still not a full closure of the underlying enumeration issue (a real production system
+    // would move this lookup behind a Cloud Function so no client ever reads ANY per-user
+    // document pre-auth, not even this narrowed one) - see PLACEHOLDERS_TODO.csv.
+    match /loginLookup/{uid} {
+      allow read: if true;
+      allow create: if isSignedIn() && request.auth.uid == uid;
+      allow update: if false;
+      allow delete: if false;
+    }
+
     match /users/{userId} {
-      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      // Tightened 2026-08-25: get() used to be allow get: if true (any signed-in OR unsigned-in
+      // caller could read an ENTIRE user profile - email, displayName, role, username - for any
+      // uid they already had or guessed), because resolveUsernameToEmail() needed a pre-auth
+      // single-document read to fetch just the email field. That pre-auth read now goes through
+      // the narrow /loginLookup/{uid} doc above instead, so this collection no longer needs to
+      // be readable before sign-in at all - get() is folded into the same owner-or-admin rule as
+      // list() below, closing the "anyone can read anyone's full profile by uid" gap entirely.
+      allow get, list: if isSignedIn() && (request.auth.uid == userId || isAdmin());
       // Role is forced to CITIZEN on account creation, server-side - previously this only
       // checked the uid match, which meant a client could in principle set()
       // its own user doc with role: "ADMIN" on first write and the rule would have allowed it
@@ -22,8 +90,163 @@ service cloud.firestore {
       // editing a user's role field directly in the Firestore console (see PLACEHOLDERS_TODO.csv).
       allow create: if isSignedIn() && request.auth.uid == userId &&
         request.resource.data.role == 'CITIZEN';
+      // fcmToken is written by FcmTokenService.onNewToken() via
+      // AuthRepositoryImpl.updateFcmToken() and is otherwise identical to a normal profile edit
+      // for rules purposes - the important constraint stays role immutability, not narrowing
+      // which fields a self-edit may touch (unlike supportMessages/reports' hasOnly() branches,
+      // this app has no UI path that lets a citizen edit uid/email/displayName/username/role
+      // directly either, so hasOnly() here wouldn't add a real boundary beyond what
+      // role == resource.data.role already enforces).
       allow update: if isSignedIn() && request.auth.uid == userId &&
         request.resource.data.role == resource.data.role;
+      allow delete: if false;
+    }
+
+    // 2026-09-01: support tickets became real multi-turn chat threads (see
+    // domain/model/SupportMessage.kt's own doc comment) - the individual messages now live in
+    // the /turns sub-collection below, this document is just the thread's metadata (who it's
+    // with, open/closed, and a denormalized preview of the most recent turn for list screens).
+    match /supportMessages/{messageId} {
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      // Citizen read is owner-only (unlike reports' isSignedIn()-for-anyone) - support messages
+      // are private correspondence with admins, not a browsable community feed.
+      allow read: if isSignedIn() &&
+        (resource.data.userId == request.auth.uid || isAdmin());
+      // Two non-admin branches (both owner-only, via resource.data.userId - a citizen can only
+      // ever touch their own ticket) alongside the admin one:
+      // - Sending a new message reopens the ticket and updates the preview/unread-for-admin
+      //   counter (SupportRepositoryImpl.sendCitizenTurn) - status/lastMessage*/unreadByAdmin.
+      // - Opening the thread clears the citizen's own unread badge
+      //   (SupportRepositoryImpl.markTicketRead) - unreadByCitizen only.
+      // An admin may write the same lastMessage*/unreadByCitizen fields when replying
+      // (sendAdminReply), status alone when closing (closeTicket), or unreadByAdmin alone when
+      // opening the thread on their side (markTicketRead) - or isAdmin() short-circuits entirely
+      // for a full-object rewrite the way every other admin-only rule in this file already does.
+      allow update: if isAdmin() ||
+        (
+          isSignedIn() && resource.data.userId == request.auth.uid &&
+          (
+            request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['status', 'lastMessagePreview', 'lastMessageSender', 'lastMessageAt', 'unreadByAdmin']) ||
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['unreadByCitizen'])
+          )
+        );
+      // CHANGED 2026-09 per explicit request ("in support we should have an option to delete
+      // resolved messages") - admin-only, and only once the ticket is actually resolved. A citizen
+      // can never delete their own ticket (they can still reopen a resolved one by sending a new
+      // message, see sendCitizenTurn - deleting it here would be a strange, easy-to-lose-history
+      // action to hand a non-admin), and an admin can't delete a STILL-OPEN conversation, which
+      // would destroy an active correspondence rather than tidy up a finished one.
+      allow delete: if isAdmin() && resource.data.status == 'RESOLVED';
+
+      match /turns/{turnId} {
+        // Read follows the parent ticket's own owner-or-admin rule - anyone who could read the
+        // ticket metadata can read its messages, nobody else.
+        allow read: if isSignedIn() &&
+          (get(/databases/$(database)/documents/supportMessages/$(messageId)).data.userId == request.auth.uid || isAdmin());
+        // A citizen may only ever create a turn as themselves, on their own ticket - senderUid
+        // must match the caller, and CITIZEN is the only sender value a non-admin can write (an
+        // admin's own turns always come through isAdmin() instead, so a citizen can never forge
+        // an ADMIN-sender turn on their own ticket).
+        allow create: if isAdmin() ||
+          (
+            isSignedIn() &&
+            get(/databases/$(database)/documents/supportMessages/$(messageId)).data.userId == request.auth.uid &&
+            request.resource.data.senderUid == request.auth.uid &&
+            request.resource.data.sender == 'CITIZEN'
+          );
+        allow update: if false;
+        // Deleting a turn on its own (leaving the parent ticket document behind) would leave a
+        // ticket with missing/inconsistent history - deletion only ever happens at the TICKET
+        // level (see the parent supportMessages/{messageId} delete rule above), which
+        // SupportRepositoryImpl.deleteTicket() pairs with deleting every turn in this
+        // sub-collection first, client-side, before deleting the parent document itself.
+        allow delete: if isAdmin() &&
+          get(/databases/$(database)/documents/supportMessages/$(messageId)).data.status == 'RESOLVED';
+      }
+    }
+
+    // Incidents sit above individual reports (see REPORT_NOTES.md "Infrastructure Incident
+    // Intelligence") - created/updated by IncidentClusteringWorker running on any signed-in
+    // citizen's device (there's no server-side clustering compute in this project), or by an
+    // admin's manual merge/unmerge/status/department/severity action.
+    match /incidents/{incidentId} {
+      // Any signed-in citizen can create/update an incident - this is the automatic-clustering
+      // path running client-side on whoever happens to submit a report near an existing cluster,
+      // mirroring how reports.update's incidentId-only branch above works for the same reason.
+      // There is no server-side identity that could otherwise "be" the clustering system, so
+      // this trusts client-computed confidence scores/membership the same way the reports
+      // collection already trusts a client-computed isAnonymous flag (see
+      // PLACEHOLDERS_TODO.csv) - a production system would move this compute + these writes to
+      // a Cloud Function instead of trusting arbitrary signed-in clients to write incident data
+      // correctly.
+      allow create: if isSignedIn();
+      // Readable by any signed-in citizen, same reasoning/precedent as reports' own read rule -
+      // an incident aggregates already-public reports (each individually readable already), so
+      // there's no NEW privacy exposure in also allowing the aggregate to be read. Anonymous
+      // reports' privacy is preserved through this either way: an incident document never
+      // stores a member report's userId, only its reportId - looking up who filed a specific
+      // member report still goes through reports' own access rules unchanged.
+      allow read: if isSignedIn();
+      // Split by field, same technique as reports.update above: the automatic-clustering path
+      // (any signed-in citizen, since there's no server-side clustering identity) may only ever
+      // touch members/reportCount/updatedAt/history - never status, department, severity, or
+      // validationNote, which are reserved for an explicit admin decision. This is the
+      // enforcement point for "admins can manually merge/unmerge" and "admin can validate/
+      // reject" being real authorization boundaries, not just a UI convention.
+      allow update: if isAdmin() ||
+        (
+          isSignedIn() &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['members', 'reportCount', 'updatedAt', 'history'])
+        );
+      // No client-side delete - an incident is either DISMISSED (a normal status, see
+      // IncidentStatus) or persists forever as part of the "maintain a complete incident
+      // history" requirement, never actually removed.
+      allow delete: if false;
+    }
+
+    // Work orders track the physical dispatch-and-repair process for an incident - admin-only
+    // end to end (unlike incidents, there is no citizen or automatic-clustering write path here
+    // at all - a work order is always an explicit administrative action).
+    match /workOrders/{workOrderId} {
+      allow create: if isAdmin();
+      // Read is admin-only, unlike reports/incidents' open-to-all-signed-in read - a work order
+      // can contain an assigned team member's name and internal repair/inspection notes not
+      // meant for public consumption, distinct from the citizen-facing incident summary.
+      allow read: if isAdmin();
+      allow update: if isAdmin();
+      allow delete: if false;
+    }
+
+    // One shared audit trail across incidents/work orders/reports (see AuditLogEntry's doc for
+    // why one collection rather than per-entity subcollections). Write-only-once semantics -
+    // entries are never edited or deleted after creation, since an audit trail that could be
+    // retroactively altered wouldn't actually provide traceability.
+    match /auditLog/{entryId} {
+      allow create: if isSignedIn() && request.resource.data.performedByUid == request.auth.uid;
+      // Admin-only read - an audit log entry can reference details (e.g. a rejected incident's
+      // validation note, a work order's internal note) not meant for citizen visibility, even
+      // though the entry's own action/entityId fields alone are fairly innocuous.
+      allow read: if isAdmin();
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // Predictive risk scores - one doc per (area grid-cell, category) bucket, recomputed by
+    // RiskRefreshWorker running on any signed-in citizen's device on a schedule (same
+    // no-server-compute reasoning as incidents/clustering - see REPORT_NOTES.md "Predictive
+    // Infrastructure Intelligence"). There is no citizen-facing UI reading this collection with
+    // a WHERE clause narrow enough to hide anything - risk scores are aggregate statistics over
+    // already-public report data, never a source of new privacy exposure.
+    match /riskScores/{riskScoreId} {
+      allow create: if isSignedIn();
+      allow read: if isSignedIn();
+      // Only the automatic refresh path writes these - no admin manual-edit UI for a computed
+      // statistic (unlike incidents' manual merge/status, a risk score isn't something an admin
+      // should be able to just declare a different value for; regenerating it via history is the
+      // only "override," by design).
+      allow update: if isSignedIn();
       allow delete: if false;
     }
 
@@ -38,18 +261,18 @@ service cloud.firestore {
           (request.resource.data.isAnonymous == false && request.resource.data.userId == request.auth.uid)
         );
       // All reports are readable by any signed-in citizen, not just the owner/admin - this is
-      // the actual intended design (the "All Reports" community tab, the map view, and upvoting
-      // all depend on browsing everyone's reports, not just your own). Found via a real
-      // PERMISSION_DENIED: getAllReports() queries the whole collection, and Firestore denies
-      // the ENTIRE query the moment even one returned document would fail a narrower per-doc
-      // read rule - a citizen-owner-only read rule was never actually compatible with a
-      // "browse all reports" list/map feature querying the full collection in one shot.
+      // the actual intended design (the "All Reports" community tab and the map view depend on
+      // browsing everyone's reports, not just your own). Found via a real PERMISSION_DENIED:
+      // getAllReports() queries the whole collection, and Firestore denies the ENTIRE query the
+      // moment even one returned document would fail a narrower per-doc read rule - a citizen-
+      // owner-only read rule was never actually compatible with a "browse all reports" list/map
+      // feature querying the full collection in one shot.
       allow read: if isSignedIn();
       // Anonymous reports (userId == "") can never match resource.data.userId ==
       // request.auth.uid below, since a real Firebase Auth uid is never an empty string - so
       // they're implicitly excluded from the owner-edit and owner-delete paths without needing
-      // an explicit isAnonymous check. Only isAdmin() or the upvote-only branch can touch them.
-      // Admins keep full update rights (they update status via a separate path).
+      // an explicit isAnonymous check. Only isAdmin() or the incidentId-only branch can touch
+      // them. Admins keep full update rights (they update status via a separate path).
       // A non-admin owner may only edit their own report while it is still SUBMITTED, may not
       // change status themselves, and may only touch category/note/needsAiReview/
       // aiSuggestedCategory/wasResubmittedAfterAiReview - not photo/location/timestamp, which
@@ -58,12 +281,13 @@ service cloud.firestore {
       // edit/resubmit-after-AI-review write (category + note, or all four AI-review fields at
       // once) both run through this same owner-update path, since there is no separate
       // server-side identity for the app's own background classification.
-      // Any signed-in user (not just the owner or an admin) may toggle their upvote on someone
-      // else's report - this is a deliberately separate access pattern from the owner-only edit
-      // path above, scoped to touch only upvoteCount/upvotedByUids. We only check that these are
-      // the sole affected keys, not that upvoteCount mathematically matches the new array length
-      // (that would require re-deriving the diff length in rules syntax); a Cloud Function would
-      // be the right place to enforce that rigorously in production - see PLACEHOLDERS_TODO.csv.
+      // The incidentId-only branch lets IncidentClusteringWorker (running on whichever citizen's
+      // device happens to submit a report - there is no server-side clustering compute in this
+      // project, see REPORT_NOTES.md) attach ANY report to an incident, not just the reports
+      // that citizen owns - clustering by definition needs to point neighboring reports (which
+      // may belong to other citizens) at the same incident. This is intentionally broader than
+      // the owner-only edit branch below; it's still scoped to touch only incidentId, nothing
+      // else about another citizen's report is writable through it.
       allow update: if isSignedIn() &&
         (
           isAdmin() ||
@@ -75,8 +299,7 @@ service cloud.firestore {
               .hasOnly(['category', 'customLabel', 'note', 'needsAiReview', 'aiSuggestedCategory', 'aiSuggestedCustomLabel', 'wasResubmittedAfterAiReview'])
           ) ||
           (
-            request.resource.data.diff(resource.data).affectedKeys()
-              .hasOnly(['upvoteCount', 'upvotedByUids'])
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['incidentId'])
           )
         );
       // Citizens may delete only their own still-unreviewed (SUBMITTED) report as a self-service

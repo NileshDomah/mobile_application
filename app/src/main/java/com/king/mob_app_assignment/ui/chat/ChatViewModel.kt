@@ -11,6 +11,7 @@ import com.king.mob_app_assignment.domain.model.Report
 import com.king.mob_app_assignment.domain.model.displayLabel
 import com.king.mob_app_assignment.domain.model.reportReferenceCode
 import com.king.mob_app_assignment.ui.reports.categoryDisplayText
+import com.king.mob_app_assignment.util.ChatPreferences
 import com.king.mob_app_assignment.util.CrashReporter
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -37,6 +38,9 @@ data class ChatUiState(
     val messages: List<ChatUiMessage> = emptyList(),
     val isWaitingForReply: Boolean = false,
     val inputText: String = "",
+    // True once the persisted conversation (if any) has been loaded, so the "empty state" view
+    // doesn't flash briefly before a restored conversation appears.
+    val isRestored: Boolean = false,
 )
 
 private const val MAX_REPORTS_IN_CONTEXT = 5
@@ -62,6 +66,7 @@ class ChatViewModel @Inject constructor(
     private val chatMessageService: ChatMessageService,
     private val reportRepository: ReportRepository,
     private val firebaseAuth: FirebaseAuth,
+    private val chatPreferences: ChatPreferences,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ChatUiState())
@@ -70,8 +75,28 @@ class ChatViewModel @Inject constructor(
     // Full conversation history sent to the LLM, INCLUDING the system prompt - kept separate
     // from ChatUiState.messages (which is system-prompt-free, for display) so the system prompt
     // never has to be filtered back out before rendering.
+    //
+    // PERSISTENCE (2026-09-11, user-reported "if I exit and re-enter the chatbot all chat
+    // disappears, it should save"): both this and _uiState.messages used to live purely in
+    // memory, scoped to this ViewModel's own lifecycle - destroyed the instant ChatScreen's nav
+    // back-stack entry was popped. Now restored from ChatPreferences on init() and re-saved after
+    // every completed turn, keyed by the signed-in user's uid.
     private var conversationHistory: List<ChatMessage> = emptyList()
     private var systemPromptBuilt = false
+
+    init {
+        viewModelScope.launch {
+            val uid = firebaseAuth.currentUser?.uid
+            val restored = if (uid != null) chatPreferences.getConversation(uid) else emptyList()
+            if (restored.isNotEmpty()) {
+                conversationHistory = restored
+                systemPromptBuilt = restored.any { it.role == ChatRole.SYSTEM }
+            }
+            _uiState.update {
+                it.copy(messages = restored.toUiMessages(), isRestored = true)
+            }
+        }
+    }
 
     fun onInputChange(value: String) {
         _uiState.update { it.copy(inputText = value) }
@@ -109,6 +134,7 @@ class ChatViewModel @Inject constructor(
                         isWaitingForReply = false,
                     )
                 }
+                persistConversation()
             } else {
                 // Deliberately NOT added to conversationHistory - a failed turn shouldn't count
                 // as part of the model's own conversation, so retrying (via sendMessage again)
@@ -126,6 +152,31 @@ class ChatViewModel @Inject constructor(
             }
         }
     }
+
+    /**
+     * "End current message and create new chat" - explicit user request. Clears both the
+     * in-memory conversation and the persisted one, so the next sendMessage() rebuilds the
+     * system prompt fresh (picking up any report status changes since the old conversation
+     * started) instead of resuming the old, now-discarded context.
+     */
+    fun startNewChat() {
+        conversationHistory = emptyList()
+        systemPromptBuilt = false
+        _uiState.update { it.copy(messages = emptyList(), inputText = "", isWaitingForReply = false) }
+        viewModelScope.launch {
+            firebaseAuth.currentUser?.uid?.let { uid -> chatPreferences.clearConversation(uid) }
+        }
+    }
+
+    private fun persistConversation() {
+        viewModelScope.launch {
+            firebaseAuth.currentUser?.uid?.let { uid -> chatPreferences.saveConversation(uid, conversationHistory) }
+        }
+    }
+
+    private fun List<ChatMessage>.toUiMessages(): List<ChatUiMessage> = this
+        .filter { it.role != ChatRole.SYSTEM }
+        .map { ChatUiMessage(role = it.role, content = it.content) }
 
     // Built once per screen session (not per-message) so the user's report snapshot doesn't
     // silently go stale mid-conversation if a report's status changes while they're chatting -

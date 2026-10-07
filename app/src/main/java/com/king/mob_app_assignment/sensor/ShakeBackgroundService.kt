@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.hardware.SensorManager
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -37,8 +38,22 @@ class ShakeBackgroundService : Service() {
         super.onCreate()
         startForeground(NOTIFICATION_ID, buildNotification())
         job = serviceScope.launch {
-            shakeDetector.onShakeDetected().collectLatest {
-                launchCaptureFromBackground()
+            // Lower-power sampling rate than the foreground in-app listener - see
+            // ShakeDetector's class doc. This service can run indefinitely in the background, so
+            // the reduced CPU/battery cost of SENSOR_DELAY_NORMAL matters here in a way it
+            // doesn't for the foreground case.
+            shakeDetector.onShakeDetected(sensorDelay = SensorManager.SENSOR_DELAY_NORMAL).collectLatest {
+                // See ShakeForegroundState's own doc comment ("shake opens the camera twice") -
+                // MainActivity's foreground listener already handles a shake while the app is
+                // actually in the foreground; reacting here too, on the exact same physical
+                // shake, was what caused the double navigation.
+                if (!ShakeForegroundState.isCurrentlyForeground()) {
+                    // Stamped BEFORE startActivity() brings MainActivity (and its own foreground
+                    // shake listener) back to life - see ShakeForegroundState's own doc comment
+                    // for why this is needed on top of the isForeground flag alone.
+                    ShakeForegroundState.recordBackgroundTrigger()
+                    launchCaptureFromBackground()
+                }
             }
         }
     }

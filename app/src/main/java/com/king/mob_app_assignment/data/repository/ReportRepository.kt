@@ -95,13 +95,15 @@ interface ReportRepository {
     // row, deleting it on success and leaving it in place (for the next retry) on failure.
     suspend fun syncPendingReports()
 
-    // Any signed-in user other than the report's owner may toggle their upvote (see
-    // firestore.rules for the matching update-rule branch). Implemented as a plain read-then-
-    // write rather than a transaction, per the scope of this feature - see PLACEHOLDERS_TODO.csv
-    // for the race-condition caveat under concurrent upvotes.
-    suspend fun toggleUpvote(id: String, uid: String): Result<Unit>
-
     fun startStatusChangeListener(uid: String)
 
     fun stopStatusChangeListener()
+
+    // Sets/clears which incident this report belongs to - called by IncidentClusteringWorker
+    // (auto-clustering) or IncidentRepositoryImpl (admin manual merge/unmerge). Deliberately a
+    // single-field write, not folded into any of the admin-workflow methods above: the incident
+    // layer sits above reports and reports themselves don't otherwise know or care about it, so
+    // this is the one narrow seam between the two, not a reason to entangle ReportRepository with
+    // incident business logic.
+    suspend fun setReportIncidentId(id: String, incidentId: String): Result<Unit>
 }

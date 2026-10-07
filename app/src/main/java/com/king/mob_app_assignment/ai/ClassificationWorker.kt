@@ -40,7 +40,7 @@ class ClassificationWorker @AssistedInject constructor(
         val userSelectedCategory = ReportCategory.entries.firstOrNull { it.name == userSelectedCategoryName }
             ?: ReportCategory.UNCATEGORIZED
 
-        val outcome = runCatching {
+        val result = runCatching {
             aiReviewCoordinator.review(reportId, Uri.parse(photoUriString), userSelectedCategory)
         }.getOrElse {
             CrashReporter.log("ClassificationWorker: unexpected exception classifying report $reportId")
@@ -48,8 +48,14 @@ class ClassificationWorker @AssistedInject constructor(
             null
         }
 
-        return when (outcome) {
-            AiReviewOutcome.AUTO_CATEGORIZED, AiReviewOutcome.CONFIRMED, AiReviewOutcome.FLAGGED -> Result.success()
+        return when (result?.outcome) {
+            AiReviewOutcome.AUTO_CATEGORIZED, AiReviewOutcome.CONFIRMED, AiReviewOutcome.FLAGGED -> {
+                // "Tell me whether the AI could classify this or not" - fires even if the app is
+                // fully closed, same as notifyClassificationFailed below, since this runs inside
+                // a WorkManager job rather than a plain in-process coroutine.
+                result.category?.let { notificationHelper.notifyClassificationSucceeded(reportId, it.name) }
+                Result.success()
+            }
             AiReviewOutcome.FAILED, null -> {
                 if (runAttemptCount >= MAX_ATTEMPTS_BEFORE_GIVING_UP) {
                     notificationHelper.notifyClassificationFailed(reportId)

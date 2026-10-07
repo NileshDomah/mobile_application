@@ -10,6 +10,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import com.google.firebase.auth.FirebaseAuth
 import com.king.mob_app_assignment.ai.ClassificationWorker
+import com.king.mob_app_assignment.ai.IncidentClusteringWorker
 import com.king.mob_app_assignment.data.local.PendingReportDao
 import com.king.mob_app_assignment.data.local.PendingReportEntity
 import com.king.mob_app_assignment.data.location.LocationProvider
@@ -36,6 +37,12 @@ enum class CaptureStage {
     IDLE,
     PREVIEW,
     ANALYZING,
+    // Distinct from ANALYZING - that stage's copy ("Analyzing photo...") is specifically about
+    // the shake flow's post-photo-capture wait. startFormFirstFlow() reused ANALYZING for its own
+    // brief GPS/heading fetch before any photo exists yet, which showed the exact same "Analyzing
+    // photo" text on a screen where the user hadn't taken a photo at all - a real, reported bug.
+    // This stage exists so the form-first flow can show its own, correctly-worded loading state.
+    PREPARING_FORM,
     FORM,
     DUPLICATE_CHECK,
     SUBMITTING,
@@ -47,8 +54,17 @@ private const val DUPLICATE_CHECK_WINDOW_MINUTES = 10L
 
 data class CaptureUiState(
     val stage: CaptureStage = CaptureStage.IDLE,
+    // photoUri/photoFile is always the FIRST photo added (the "primary" one) - the one shown in
+    // the shake-to-report PREVIEW/annotator flow, the one EXIF-stripped, classified by AI, and
+    // written to Report.localPhotoPath for back-compat with every existing report document (which
+    // predates multi-photo support and only ever had one photo field). additionalPhotoFiles holds
+    // every photo after the first, added via the form-first flow's "Add more" tile - shake-to-
+    // report never populates this list, since that flow captures exactly one photo and jumps
+    // straight to PREVIEW/confirm, bypassing the form-first "Add Photos" grid entirely.
     val photoUri: Uri? = null,
     val photoFile: File? = null,
+    val additionalPhotoUris: List<Uri> = emptyList(),
+    val additionalPhotoFiles: List<File> = emptyList(),
     // Set instead of photoUri/photoFile when the user recorded/picked a video. Mutually
     // exclusive with photoUri/photoFile by construction - see onVideoCaptured vs onPhotoCaptured.
     val videoUri: Uri? = null,
@@ -103,6 +119,82 @@ class CaptureViewModel @Inject constructor(
 
     fun onRetake() {
         _uiState.update { CaptureUiState(stage = CaptureStage.IDLE) }
+    }
+
+    // Entry point for the form-first flow (tapping "Report Issue", as opposed to shake-to-report
+    // which calls onPhotoCaptured directly and goes through the PREVIEW/ANALYZING pipeline
+    // instead) - lands straight on an empty FORM with no photo yet. Location/heading are captured
+    // immediately rather than waiting for a first photo, since the form needs them to render its
+    // metadata card regardless of whether/when a photo gets added.
+    fun startFormFirstFlow() {
+        _uiState.update { it.copy(stage = CaptureStage.PREPARING_FORM) }
+        viewModelScope.launch {
+            val captureTimestamp = System.currentTimeMillis()
+            val locationDeferred = async {
+                runCatching {
+                    val location = locationProvider.getCurrentLocation()
+                    val address = location?.let {
+                        locationProvider.reverseGeocode(it.latitude, it.longitude)
+                    }
+                    Triple(location?.latitude ?: 0.0, location?.longitude ?: 0.0, address.orEmpty())
+                }.getOrElse { Triple(0.0, 0.0, "") }
+            }
+            val headingDeferred = async {
+                runCatching { compassProvider.headingDegreesFlow().first() }.getOrElse { 0f }
+            }
+            val (lat, lng, address) = locationDeferred.await()
+            val heading = headingDeferred.await()
+            _uiState.update {
+                it.copy(
+                    stage = CaptureStage.FORM,
+                    latitude = lat,
+                    longitude = lng,
+                    address = address,
+                    headingDegrees = heading,
+                    headingCardinal = CompassProvider.degreesToCardinal(heading),
+                    timestamp = captureTimestamp,
+                )
+            }
+        }
+    }
+
+    // Appends a photo captured/picked from the form-first flow's "Add Photos" tile. The first
+    // photo added becomes the primary photoUri/photoFile (see CaptureUiState's doc comment);
+    // every one after that goes into additionalPhotoFiles. EXIF-stripped immediately on capture
+    // (unlike the shake flow, which strips in onConfirmCapture) since there is no separate
+    // confirm step in the form-first flow for each individual photo added this way.
+    fun onFormPhotoAdded(uri: Uri, file: File) {
+        ExifStripper.stripSensitiveTags(file)
+        _uiState.update { current ->
+            if (current.photoFile == null) {
+                current.copy(photoUri = uri, photoFile = file)
+            } else {
+                current.copy(
+                    additionalPhotoUris = current.additionalPhotoUris + uri,
+                    additionalPhotoFiles = current.additionalPhotoFiles + file,
+                )
+            }
+        }
+    }
+
+    // Removes a photo from the form-first flow's grid by its position among ALL photos (primary
+    // first, then additional ones in order) - lets the grid render one flat list of thumbnails
+    // without the caller needing to know about the primary/additional split internally. Removing
+    // index 0 promotes the next photo (if any) to primary.
+    fun onFormPhotoRemoved(index: Int) {
+        _uiState.update { current ->
+            val allUris = listOfNotNull(current.photoUri) + current.additionalPhotoUris
+            val allFiles = listOfNotNull(current.photoFile) + current.additionalPhotoFiles
+            if (index !in allFiles.indices) return@update current
+            val newUris = allUris.toMutableList().apply { removeAt(index) }
+            val newFiles = allFiles.toMutableList().apply { removeAt(index) }
+            current.copy(
+                photoUri = newUris.firstOrNull(),
+                photoFile = newFiles.firstOrNull(),
+                additionalPhotoUris = newUris.drop(1),
+                additionalPhotoFiles = newFiles.drop(1),
+            )
+        }
     }
 
     fun onConfirmCapture() {
@@ -241,13 +333,26 @@ class CaptureViewModel @Inject constructor(
         // is enforced elsewhere, not here), but that identity is deliberately never attached to
         // the report document.
         val userId = if (state.isAnonymous) "" else firebaseAuth.currentUser?.uid.orEmpty()
+        // Denormalized onto the report so admin-facing screens can show who filed it without a
+        // per-report /users/{userId} lookup - see Report.reporterName's own doc comment. Read
+        // straight off FirebaseAuth's own cached profile (set once at registration via
+        // updateProfile(), see AuthRepositoryImpl.register()) rather than a fresh Firestore read,
+        // since it's already in memory and this is just a point-in-time snapshot anyway. Blank
+        // for an anonymous report, matching userId above.
+        val reporterName = if (state.isAnonymous) "" else firebaseAuth.currentUser?.displayName.orEmpty()
+        // The real trim-both-ends pass happens here, once, at actual submit time - not on every
+        // keystroke (see NoteSanitizer.sanitizeNote's own doc comment for why trimming live used
+        // to make the space bar look broken).
+        val submittedNote = NoteSanitizer.sanitizeNoteForSubmit(state.note)
         val report = Report(
             userId = userId,
+            reporterName = reporterName,
             isAnonymous = state.isAnonymous,
             category = category,
             customLabel = if (category == ReportCategory.CUSTOM) state.customLabel.trim() else "",
             mediaType = state.mediaType,
             localPhotoPath = photoFile?.absolutePath,
+            additionalLocalPhotoPaths = state.additionalPhotoFiles.map { it.absolutePath },
             localVideoPath = videoFile?.absolutePath,
             latitude = state.latitude,
             longitude = state.longitude,
@@ -255,7 +360,7 @@ class CaptureViewModel @Inject constructor(
             headingDegrees = state.headingDegrees,
             headingCardinal = state.headingCardinal,
             timestamp = state.timestamp,
-            note = state.note,
+            note = submittedNote,
         )
 
         CrashReporter.log("CaptureViewModel: submitting report category=${category.name} mediaType=${state.mediaType.name}")
@@ -270,6 +375,12 @@ class CaptureViewModel @Inject constructor(
             if (!isVideo && !submittedId.isNullOrBlank() && photoFile != null) {
                 enqueueClassificationWork(submittedId, photoFile, category)
             }
+            // Incident clustering runs for every report regardless of media type - unlike AI
+            // classification, it only needs category/location/timestamp (all present for video
+            // reports too), not the photo/video content itself.
+            if (!submittedId.isNullOrBlank()) {
+                enqueueIncidentClusteringWork(submittedId)
+            }
         } else {
             result.exceptionOrNull()?.let {
                 CrashReporter.log("CaptureViewModel: report submission failed, queuing locally")
@@ -277,9 +388,13 @@ class CaptureViewModel @Inject constructor(
             }
             val entity = PendingReportEntity(
                 userId = userId,
+                reporterName = reporterName,
                 category = category.name,
                 customLabel = report.customLabel,
                 localPhotoPath = photoFile?.absolutePath.orEmpty(),
+                additionalLocalPhotoPaths = state.additionalPhotoFiles.joinToString(
+                    com.king.mob_app_assignment.data.local.PendingReportEntity.ADDITIONAL_PHOTO_PATHS_DELIMITER,
+                ) { it.absolutePath },
                 mediaType = state.mediaType.name,
                 localVideoPath = videoFile?.absolutePath.orEmpty(),
                 isAnonymous = state.isAnonymous,
@@ -289,7 +404,7 @@ class CaptureViewModel @Inject constructor(
                 headingDegrees = state.headingDegrees,
                 headingCardinal = state.headingCardinal,
                 timestamp = state.timestamp,
-                note = state.note,
+                note = submittedNote,
                 status = "SUBMITTED",
             )
             pendingReportDao.insert(entity)
@@ -313,6 +428,18 @@ class CaptureViewModel @Inject constructor(
                     .putString(ClassificationWorker.KEY_USER_SELECTED_CATEGORY, userSelectedCategory.name)
                     .build(),
             )
+            .build()
+        workManager.enqueue(request)
+    }
+
+    // Same durability rationale as enqueueClassificationWork - a plain coroutine would die if
+    // the process is killed right after submit. No network constraint here (unlike
+    // classification): clustering only reads/writes Firestore directly, and Firestore's own
+    // offline persistence/write queue already handles connectivity gaps without WorkManager
+    // needing to gate on NetworkType.CONNECTED itself.
+    private fun enqueueIncidentClusteringWork(reportId: String) {
+        val request = OneTimeWorkRequestBuilder<IncidentClusteringWorker>()
+            .setInputData(Data.Builder().putString(IncidentClusteringWorker.KEY_REPORT_ID, reportId).build())
             .build()
         workManager.enqueue(request)
     }

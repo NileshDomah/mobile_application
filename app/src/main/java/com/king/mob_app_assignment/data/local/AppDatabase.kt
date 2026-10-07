@@ -5,7 +5,9 @@ import androidx.room.RoomDatabase
 
 @Database(
     entities = [PendingReportEntity::class],
-    version = 1,
+    // Bumped again for PendingReportEntity.reporterName (admin-visible reporter name) - same
+    // fallbackToDestructiveMigration() reasoning as the version 2 bump above applies here too.
+    version = 3,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {

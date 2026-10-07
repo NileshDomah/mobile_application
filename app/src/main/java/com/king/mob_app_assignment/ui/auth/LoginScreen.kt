@@ -13,11 +13,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -48,12 +46,14 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.king.mob_app_assignment.R
 import com.king.mob_app_assignment.ui.components.PrimaryActionButton
 import com.king.mob_app_assignment.util.BiometricAuthManager
+import com.king.mob_app_assignment.ui.theme.translatedStringResource
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LoginScreen(
     onLoginSuccess: () -> Unit,
     onNavigateToRegister: () -> Unit,
+    onNavigateToForgotCredentials: () -> Unit = {},
     viewModel: LoginViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -62,8 +62,22 @@ fun LoginScreen(
     val activity = context as? FragmentActivity
     val biometricAvailable = remember { BiometricAuthManager.isAvailable(context) }
 
-    LaunchedEffect(uiState.isLoginSuccessful) {
-        if (uiState.isLoginSuccessful) onLoginSuccess()
+    // Deliberately does NOT navigate while the enable-biometrics dialog is still up - it and
+    // isLoginSuccessful are set together by the same login() success branch, and navigating away
+    // immediately used to tear this screen (and the dialog on it) down before the user could even
+    // read it, let alone tap a button - the "enable biometrics" popup that "closes too fast to
+    // use." Navigation waits until the dialog has been dismissed one way or the other (see
+    // onEnableBiometricLogin/dismissEnableBiometricPrompt, both of which clear the flag).
+    //
+    // Must also check biometricAvailable here, not just showEnableBiometricPrompt: the ViewModel
+    // sets that flag purely based on "not already enabled for this device," with no knowledge of
+    // hardware/enrollment - the dialog below only actually renders when biometricAvailable is
+    // ALSO true. On a device with no biometric hardware/enrollment (e.g. most emulators), the
+    // flag would be true forever with no dialog ever appearing to clear it - which silently
+    // blocked navigation entirely and looked exactly like "the login button doesn't work."
+    val awaitingBiometricDialog = uiState.showEnableBiometricPrompt && biometricAvailable
+    LaunchedEffect(uiState.isLoginSuccessful, awaitingBiometricDialog) {
+        if (uiState.isLoginSuccessful && !awaitingBiometricDialog) onLoginSuccess()
     }
 
     // BiometricPrompt requires a FragmentActivity - MainActivity extends AppCompatActivity,
@@ -87,16 +101,90 @@ fun LoginScreen(
         BiometricPrompt(fragmentActivity, executor, callback).authenticate(promptInfo, cryptoObject)
     }
 
-    if (uiState.showEnableBiometricPrompt && biometricAvailable) {
+    // Separate from launchBiometricPrompt above: this is the ENABLE-time challenge, not the
+    // sign-in one - this exists purely to make the user actually prove they can authenticate with
+    // their fingerprint/face before biometric login is switched on, per explicit request ("it
+    // should ask the user to input the biometric... first"), rather than switching it on from a
+    // button tap alone.
+    //
+    // ROOT CAUSE FIX (2026-09-11, user-reported "keeps asking whether I want to enable it but
+    // never does" - see BiometricCredentialStore.buildEnableCryptoObject's doc comment for the
+    // full explanation): this used to call authenticate(promptInfo) with NO CryptoObject, on the
+    // false assumption noted in the old comment here ("enable() encrypts, which the Keystore key
+    // doesn't gate"). That's wrong - the key is generated with setUserAuthenticationRequired(true)
+    // covering BOTH encrypt and decrypt, with no validity-duration grace period, so a
+    // BiometricPrompt success that isn't tied to the specific Cipher used for encryption changes
+    // nothing about that Cipher's own auth-gate state. The old onEnableBiometricChallengeSucceeded
+    // then created a fresh, never-authenticated Cipher and immediately hit
+    // UserNotAuthenticatedException, silently returning false every time. Now builds the
+    // encrypt-mode CryptoObject FIRST and authenticates that specific Cipher.
+    val enableChallengeTitle = translatedStringResource(R.string.login_biometric_enable_challenge_title)
+    val enableChallengeSubtitle = translatedStringResource(R.string.login_biometric_enable_challenge_subtitle)
+    val enableChallengeCancel = translatedStringResource(R.string.login_biometric_enable_challenge_cancel)
+
+    fun launchEnableBiometricChallenge() {
+        val fragmentActivity = activity ?: return
+        val cryptoObject = viewModel.buildEnableCryptoObject()
+        if (cryptoObject == null) {
+            viewModel.onEnableBiometricChallengeFailedOrCancelled()
+            return
+        }
+        val executor = ContextCompat.getMainExecutor(context)
+        val callback = object : BiometricPrompt.AuthenticationCallback() {
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                val cipher = result.cryptoObject?.cipher
+                if (cipher != null) {
+                    viewModel.onEnableBiometricChallengeSucceeded(cipher)
+                } else {
+                    viewModel.onEnableBiometricChallengeFailedOrCancelled()
+                }
+            }
+            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                viewModel.onEnableBiometricChallengeFailedOrCancelled()
+            }
+            override fun onAuthenticationFailed() {
+                // A single failed scan attempt (wrong finger, etc) - BiometricPrompt itself keeps
+                // showing its own UI for further attempts, so this deliberately does NOT clear
+                // pendingBiometricEnableChallenge or touch uiState; only a terminal error/cancel
+                // (onAuthenticationError above) or a real success ends this challenge.
+            }
+        }
+        val promptInfo = BiometricPrompt.PromptInfo.Builder()
+            .setTitle(enableChallengeTitle)
+            .setSubtitle(enableChallengeSubtitle)
+            .setAllowedAuthenticators(BiometricAuthManager.AUTHENTICATORS)
+            .setNegativeButtonText(enableChallengeCancel)
+            .build()
+        BiometricPrompt(fragmentActivity, executor, callback).authenticate(promptInfo, cryptoObject)
+    }
+
+    LaunchedEffect(uiState.pendingBiometricEnableChallenge) {
+        if (uiState.pendingBiometricEnableChallenge) {
+            launchEnableBiometricChallenge()
+            viewModel.onEnableBiometricChallengeLaunched()
+        }
+    }
+
+    if (awaitingBiometricDialog) {
         AlertDialog(
-            onDismissRequest = viewModel::dismissEnableBiometricPrompt,
-            title = { Text("Enable biometric sign-in?") },
-            text = { Text("Next time, sign in instantly with your fingerprint or face instead of typing your password.") },
+            onDismissRequest = viewModel::dismissEnableBiometricPromptForNow,
+            title = { Text(translatedStringResource(R.string.login_biometric_dialog_title)) },
+            text = {
+                Column {
+                    Text(translatedStringResource(R.string.login_biometric_dialog_message))
+                    TextButton(
+                        onClick = viewModel::declineEnableBiometricPromptPermanently,
+                        modifier = Modifier.padding(top = 8.dp),
+                    ) {
+                        Text(translatedStringResource(R.string.login_biometric_never))
+                    }
+                }
+            },
             confirmButton = {
-                TextButton(onClick = viewModel::onEnableBiometricLogin) { Text("Enable") }
+                TextButton(onClick = viewModel::onEnableBiometricLoginRequested) { Text(translatedStringResource(R.string.login_biometric_enable)) }
             },
             dismissButton = {
-                TextButton(onClick = viewModel::dismissEnableBiometricPrompt) { Text("Not now") }
+                TextButton(onClick = viewModel::dismissEnableBiometricPromptForNow) { Text(translatedStringResource(R.string.login_biometric_not_now)) }
             },
         )
     }
@@ -106,19 +194,20 @@ fun LoginScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(24.dp)
+                .padding(horizontal = 24.dp)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.Center,
         ) {
             AuthBrandHeader(
-                title = stringResource(R.string.login_welcome_back),
-                subtitle = stringResource(R.string.login_subtitle),
+                title = translatedStringResource(R.string.login_welcome_back),
+                subtitle = translatedStringResource(R.string.login_subtitle),
+                modifier = Modifier.padding(top = 32.dp),
             )
 
             OutlinedTextField(
-                value = uiState.email,
-                onValueChange = viewModel::onEmailChange,
-                label = { Text(stringResource(R.string.login_email_label)) },
+                value = uiState.emailOrUsername,
+                onValueChange = viewModel::onEmailOrUsernameChange,
+                label = { Text("Email or username") },
                 singleLine = true,
                 isError = uiState.emailError != null,
                 supportingText = { uiState.emailError?.let { Text(it) } },
@@ -130,7 +219,7 @@ fun LoginScreen(
             OutlinedTextField(
                 value = uiState.password,
                 onValueChange = viewModel::onPasswordChange,
-                label = { Text(stringResource(R.string.login_password_label)) },
+                label = { Text(translatedStringResource(R.string.login_password_label)) },
                 singleLine = true,
                 isError = uiState.passwordError != null,
                 supportingText = { uiState.passwordError?.let { Text(it) } },
@@ -161,26 +250,8 @@ fun LoginScreen(
                     onCheckedChange = viewModel::onRememberMeChange,
                 )
                 Text(
-                    text = stringResource(R.string.login_remember_me),
+                    text = translatedStringResource(R.string.login_remember_me),
                     style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-
-            // "Sign in as admin" is purely a UX affordance - the real gate is the account's
-            // Firestore role field, checked in LoginViewModel.login() after auth succeeds. There
-            // is deliberately no equivalent option on the register screen - admin accounts are
-            // never self-service, only ever created by editing Firestore directly.
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 12.dp),
-            ) {
-                FilterChip(
-                    selected = uiState.isAdminLogin,
-                    onClick = { viewModel.onAdminLoginToggle(!uiState.isAdminLogin) },
-                    label = { Text("Sign in as admin") },
-                    leadingIcon = { Icon(Icons.Filled.AdminPanelSettings, contentDescription = null) },
                 )
             }
 
@@ -193,8 +264,15 @@ fun LoginScreen(
                 )
             }
 
+            TextButton(
+                onClick = onNavigateToForgotCredentials,
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            ) {
+                Text(translatedStringResource(R.string.login_forgot_credentials))
+            }
+
             PrimaryActionButton(
-                text = stringResource(R.string.login_button),
+                text = translatedStringResource(R.string.login_button),
                 onClick = viewModel::login,
                 isLoading = uiState.isLoading,
                 modifier = Modifier.padding(top = 20.dp),
@@ -207,7 +285,7 @@ fun LoginScreen(
                     shape = MaterialTheme.shapes.small,
                 ) {
                     Icon(Icons.Filled.Fingerprint, contentDescription = null)
-                    Text(text = "Sign in with biometrics", modifier = Modifier.padding(start = 8.dp))
+                    Text(text = translatedStringResource(R.string.login_biometric_sign_in), modifier = Modifier.padding(start = 8.dp))
                 }
             }
 
@@ -217,7 +295,7 @@ fun LoginScreen(
                     .fillMaxWidth()
                     .padding(top = 4.dp),
             ) {
-                Text(stringResource(R.string.login_register_prompt))
+                Text(translatedStringResource(R.string.login_register_prompt))
             }
         }
     }

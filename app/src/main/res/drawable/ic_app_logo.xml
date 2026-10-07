@@ -1,61 +1,90 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    App logo (2026-08-31 redesign) - a phone with shake-motion arcs, replacing the earlier
+    shield+GPS-pin motif. Echoes the Home screen's own hero illustration and the app's name
+    ("Shake to Report") more directly than a generic civic-shield symbol did, and uses the
+    app's current bright-blue palette (CivicBlue10/40/90 in ui/theme/Color.kt) instead of the
+    old teal/amber scheme this replaced. Used on the splash screen (values/themes.xml,
+    values-night/themes.xml), the auth header (AuthBrandHeader.kt), and the onboarding screen.
+
+    All content is kept within a ~72x72 safe zone centered in the 120x120 viewport (roughly
+    x/y 24-96) - the Android 12+ SplashScreen API crops windowSplashScreenAnimatedIcon content
+    outside a similar safe-zone convention to adaptive icons, and an earlier version of this
+    file that let the shake-motion arcs extend all the way to the viewport's edges got them
+    silently clipped off on the actual splash screen (only the phone body rendered). Keep any
+    future redraw within that same safe zone.
+
+    See ic_stat_notification.xml for the separate flattened single-color version required for
+    the status bar - keep that file's silhouette in sync with this one's phone shape if this
+    is ever redrawn again.
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="120dp"
     android:height="120dp"
     android:viewportWidth="120"
     android:viewportHeight="120">
 
-    <!-- Shield: civic/official trust -->
+    <!-- Phone body -->
     <path
-        android:fillColor="#0B4F6C"
-        android:pathData="M60,8
-            L100,22
-            V56
-            C100,84 82,102 60,112
-            C38,102 20,84 20,56
-            V22
+        android:fillColor="#1E5FD9"
+        android:pathData="M49,32
+            h22
+            a6,6 0 0,1 6,6
+            v40
+            a6,6 0 0,1 -6,6
+            h-22
+            a6,6 0 0,1 -6,-6
+            v-40
+            a6,6 0 0,1 6,-6
             Z" />
 
+    <!-- Screen inset -->
     <path
-        android:fillColor="#9FCBE0"
-        android:fillAlpha="0.18"
-        android:pathData="M60,16
-            L92,27
-            V56
-            C92,79 77,94 60,103
-            C43,94 28,79 28,56
-            V27
+        android:fillColor="#DCE6FF"
+        android:pathData="M51.4,37.6
+            h17.2
+            a2.4,2.4 0 0,1 2.4,2.4
+            v33.6
+            a2.4,2.4 0 0,1 -2.4,2.4
+            h-17.2
+            a2.4,2.4 0 0,1 -2.4,-2.4
+            v-33.6
+            a2.4,2.4 0 0,1 2.4,-2.4
             Z" />
 
-    <!-- GPS location pin at the shield's core -->
+    <!-- Home indicator bar -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M60,32
-            C48.95,32 40,40.95 40,52
-            C40,67 60,86 60,86
-            C60,86 80,67 80,52
-            C80,40.95 71.05,32 60,32
-            Z" />
-    <path
-        android:fillColor="#0B4F6C"
-        android:pathData="M60,42
-            C54.48,42 50,46.48 50,52
-            C50,57.52 54.48,62 60,62
-            C65.52,62 70,57.52 70,52
-            C70,46.48 65.52,42 60,42
-            Z" />
+        android:fillColor="#1E5FD9"
+        android:fillAlpha="0.35"
+        android:pathData="M56.8,78.4 h6.4 a1.2,1.2 0 0,1 0,2.4 h-6.4 a1.2,1.2 0 0,1 0,-2.4 Z" />
 
-    <!-- Shake burst accent, amber -->
+    <!-- Shake-motion arcs, left side (two concentric, fading outward) -->
     <path
-        android:fillColor="#B2650A"
-        android:pathData="M22,30 L14,22 L18,20 L27,26 Z" />
+        android:fillColor="#00000000"
+        android:strokeColor="#1E5FD9"
+        android:strokeWidth="2.4"
+        android:strokeLineCap="round"
+        android:pathData="M37,45.4 A13.2,13.2 0 0,0 37,74.6" />
     <path
-        android:fillColor="#B2650A"
-        android:pathData="M98,30 L106,22 L102,20 L93,26 Z" />
+        android:fillColor="#00000000"
+        android:strokeColor="#1E5FD9"
+        android:strokeAlpha="0.7"
+        android:strokeWidth="2.4"
+        android:strokeLineCap="round"
+        android:pathData="M31.4,41.8 A18.6,18.6 0 0,0 31.4,78.2" />
+
+    <!-- Shake-motion arcs, right side (mirrored) -->
     <path
-        android:fillColor="#B2650A"
-        android:pathData="M16,48 L6,46 L7,42 L17,42 Z" />
+        android:fillColor="#00000000"
+        android:strokeColor="#1E5FD9"
+        android:strokeWidth="2.4"
+        android:strokeLineCap="round"
+        android:pathData="M83,45.4 A13.2,13.2 0 0,1 83,74.6" />
     <path
-        android:fillColor="#B2650A"
-        android:pathData="M104,48 L114,46 L113,42 L103,42 Z" />
+        android:fillColor="#00000000"
+        android:strokeColor="#1E5FD9"
+        android:strokeAlpha="0.7"
+        android:strokeWidth="2.4"
+        android:strokeLineCap="round"
+        android:pathData="M88.6,41.8 A18.6,18.6 0 0,1 88.6,78.2" />
 </vector>

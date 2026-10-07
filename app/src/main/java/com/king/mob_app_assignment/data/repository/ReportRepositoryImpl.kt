@@ -8,6 +8,7 @@ import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Query
 import com.king.mob_app_assignment.data.local.PendingReportDao
 import com.king.mob_app_assignment.data.local.PendingReportEntity
+import com.king.mob_app_assignment.data.local.additionalLocalPhotoPathsList
 import com.king.mob_app_assignment.data.remote.FirestoreConstants
 import com.king.mob_app_assignment.domain.model.Department
 import com.king.mob_app_assignment.domain.model.Report
@@ -20,10 +21,12 @@ import com.king.mob_app_assignment.util.ConnectivityObserver
 import com.king.mob_app_assignment.util.CrashReporter
 import com.king.mob_app_assignment.util.NotificationHelper
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import java.io.File
 import javax.inject.Inject
@@ -84,7 +87,29 @@ class ReportRepositoryImpl @Inject constructor(
         awaitClose { listener.remove() }
     }
 
+    // Firestore's snapshot listener fires an initial callback from the LOCAL CACHE before the
+    // server round-trip completes - if this collection hasn't been cached on-device yet, that
+    // first callback delivers an empty list, which the UI would otherwise render as "you have no
+    // reports" for a brief moment before the real, server-confirmed data arrives a beat later
+    // (this is what showed up as an empty-state flash on MyReportsScreen). Skipping any snapshot
+    // still tagged isFromCache == true when it's ALSO EMPTY closes that gap without hiding
+    // genuinely cached-but-populated data (a cache hit with real documents in it renders
+    // immediately, same as before) or delaying a real empty state indefinitely (an empty
+    // SERVER-confirmed snapshot still comes through and renders correctly, it's only the
+    // empty-because-nothing-cached-yet case that gets skipped).
     override fun getReportsForUser(uid: String): Flow<List<Report>> = callbackFlow {
+        // Safety net for a genuinely offline device with nothing cached yet: in that case no
+        // server-confirmed snapshot will EVER arrive to satisfy the skip below, which would
+        // otherwise leave the UI stuck on its loading state forever. If nothing has been sent
+        // within a couple seconds, fall back to emitting an empty list anyway - a real empty
+        // state is a better outcome than an infinite spinner, and this only ever fires when
+        // there was truly nothing to show in the first place (any real cached data, empty or
+        // not, already satisfied the listener above well before this fires).
+        var hasSentAny = false
+        val fallbackJob = launch {
+            delay(3_000)
+            if (!hasSentAny) trySend(emptyList())
+        }
         val listener = reportsCollection
             .whereEqualTo(FirestoreConstants.ReportFields.USER_ID, uid)
             .orderBy(FirestoreConstants.ReportFields.TIMESTAMP, Query.Direction.DESCENDING)
@@ -94,10 +119,17 @@ class ReportRepositoryImpl @Inject constructor(
                     return@addSnapshotListener
                 }
                 if (snapshot != null) {
-                    trySend(snapshot.documents.mapNotNull { it.toReportOrNull() })
+                    val reports = snapshot.documents.mapNotNull { it.toReportOrNull() }
+                    if (reports.isEmpty() && snapshot.metadata.isFromCache) return@addSnapshotListener
+                    hasSentAny = true
+                    fallbackJob.cancel()
+                    trySend(reports)
                 }
             }
-        awaitClose { listener.remove() }
+        awaitClose {
+            fallbackJob.cancel()
+            listener.remove()
+        }
     }
 
     override fun getReportById(id: String): Flow<Report?> = callbackFlow {
@@ -265,6 +297,7 @@ class ReportRepositoryImpl @Inject constructor(
                 pendingReportDao.insert(
                     PendingReportEntity(
                         userId = report.userId,
+                        reporterName = report.reporterName,
                         category = report.category.name,
                         customLabel = report.customLabel,
                         localPhotoPath = photoFile?.absolutePath ?: report.localPhotoPath.orEmpty(),
@@ -294,11 +327,13 @@ class ReportRepositoryImpl @Inject constructor(
         for (entity in pending) {
             val report = Report(
                 userId = entity.userId,
+                reporterName = entity.reporterName,
                 isAnonymous = entity.isAnonymous,
                 category = ReportCategory.fromFirestoreValue(entity.category),
                 customLabel = entity.customLabel,
                 mediaType = if (entity.mediaType == ReportMediaType.VIDEO.name) ReportMediaType.VIDEO else ReportMediaType.PHOTO,
                 localPhotoPath = entity.localPhotoPath.ifBlank { null },
+                additionalLocalPhotoPaths = entity.additionalLocalPhotoPathsList(),
                 localVideoPath = entity.localVideoPath.ifBlank { null },
                 latitude = entity.latitude,
                 longitude = entity.longitude,
@@ -316,25 +351,6 @@ class ReportRepositoryImpl @Inject constructor(
                 pendingReportDao.deleteById(entity.id)
             }
         }
-    }
-
-    override suspend fun toggleUpvote(id: String, uid: String): Result<Unit> = runCatching {
-        val docRef = reportsCollection.document(id)
-        val snapshot = docRef.get().await()
-        val report = snapshot.toReportOrNull() ?: error("Report $id not found")
-        val alreadyUpvoted = uid in report.upvotedByUids
-        val updatedUids = if (alreadyUpvoted) {
-            report.upvotedByUids - uid
-        } else {
-            report.upvotedByUids + uid
-        }
-        docRef.update(
-            mapOf(
-                FirestoreConstants.ReportFields.UPVOTED_BY_UIDS to updatedUids,
-                FirestoreConstants.ReportFields.UPVOTE_COUNT to updatedUids.size,
-            ),
-        ).await()
-        Unit
     }
 
     override fun startStatusChangeListener(uid: String) {
@@ -364,6 +380,13 @@ class ReportRepositoryImpl @Inject constructor(
     override fun stopStatusChangeListener() {
         statusListenerRegistration?.remove()
         statusListenerRegistration = null
+    }
+
+    override suspend fun setReportIncidentId(id: String, incidentId: String): Result<Unit> = runCatching {
+        reportsCollection.document(id)
+            .update(FirestoreConstants.ReportFields.INCIDENT_ID, incidentId)
+            .await()
+        Unit
     }
 
     private suspend fun createReport(report: Report, photoFile: File?): Result<Report> = runCatching {
@@ -409,9 +432,12 @@ class ReportRepositoryImpl @Inject constructor(
         return Report(
             id = id,
             userId = getString(FirestoreConstants.ReportFields.USER_ID).orEmpty(),
+            reporterName = getString(FirestoreConstants.ReportFields.REPORTER_NAME).orEmpty(),
             category = ReportCategory.fromFirestoreValue(getString(FirestoreConstants.ReportFields.CATEGORY)),
             photoUrl = getString(FirestoreConstants.ReportFields.PHOTO_URL),
             localPhotoPath = getString(FirestoreConstants.ReportFields.LOCAL_PHOTO_PATH),
+            additionalLocalPhotoPaths = (get(FirestoreConstants.ReportFields.ADDITIONAL_LOCAL_PHOTO_PATHS) as? List<*>)
+                ?.mapNotNull { it as? String } ?: emptyList(),
             mediaType = if (getString(FirestoreConstants.ReportFields.MEDIA_TYPE) == ReportMediaType.VIDEO.name) {
                 ReportMediaType.VIDEO
             } else {
@@ -438,9 +464,6 @@ class ReportRepositoryImpl @Inject constructor(
             priority = ReportPriority.fromFirestoreValue(getString(FirestoreConstants.ReportFields.PRIORITY)),
             resolutionNote = getString(FirestoreConstants.ReportFields.RESOLUTION_NOTE).orEmpty(),
             resolutionPhotoPath = getString(FirestoreConstants.ReportFields.RESOLUTION_PHOTO_PATH),
-            upvoteCount = (getLong(FirestoreConstants.ReportFields.UPVOTE_COUNT) ?: 0L).toInt(),
-            upvotedByUids = (get(FirestoreConstants.ReportFields.UPVOTED_BY_UIDS) as? List<*>)
-                ?.filterIsInstance<String>() ?: emptyList(),
             statusHistory = (get(FirestoreConstants.ReportFields.STATUS_HISTORY) as? List<*>)
                 ?.mapNotNull { entry ->
                     val map = entry as? Map<*, *> ?: return@mapNotNull null
@@ -453,15 +476,18 @@ class ReportRepositoryImpl @Inject constructor(
                     )
                 }
                 ?.sortedBy { it.timestamp } ?: emptyList(),
+            incidentId = getString(FirestoreConstants.ReportFields.INCIDENT_ID).orEmpty(),
         )
     }
 
     private fun Report.toFirestoreMap(): Map<String, Any?> = mapOf(
         FirestoreConstants.ReportFields.USER_ID to userId,
+        FirestoreConstants.ReportFields.REPORTER_NAME to reporterName,
         FirestoreConstants.ReportFields.CATEGORY to category.name,
         FirestoreConstants.ReportFields.CUSTOM_LABEL to customLabel,
         FirestoreConstants.ReportFields.PHOTO_URL to photoUrl,
         FirestoreConstants.ReportFields.LOCAL_PHOTO_PATH to localPhotoPath,
+        FirestoreConstants.ReportFields.ADDITIONAL_LOCAL_PHOTO_PATHS to additionalLocalPhotoPaths,
         FirestoreConstants.ReportFields.MEDIA_TYPE to mediaType.name,
         FirestoreConstants.ReportFields.LOCAL_VIDEO_PATH to localVideoPath,
         FirestoreConstants.ReportFields.VIDEO_URL to videoUrl,
@@ -482,8 +508,6 @@ class ReportRepositoryImpl @Inject constructor(
         FirestoreConstants.ReportFields.PRIORITY to priority.name,
         FirestoreConstants.ReportFields.RESOLUTION_NOTE to resolutionNote,
         FirestoreConstants.ReportFields.RESOLUTION_PHOTO_PATH to resolutionPhotoPath,
-        FirestoreConstants.ReportFields.UPVOTE_COUNT to upvoteCount,
-        FirestoreConstants.ReportFields.UPVOTED_BY_UIDS to upvotedByUids,
         FirestoreConstants.ReportFields.STATUS_HISTORY to statusHistory.map { entry ->
             mapOf(
                 FirestoreConstants.StatusHistoryEntryFields.STATUS to entry.status.name,
@@ -491,5 +515,6 @@ class ReportRepositoryImpl @Inject constructor(
                 FirestoreConstants.StatusHistoryEntryFields.NOTE to entry.note,
             )
         },
+        FirestoreConstants.ReportFields.INCIDENT_ID to incidentId,
     )
 }

@@ -1,8 +1,6 @@
 package com.king.mob_app_assignment.ui.reports
 
 import androidx.compose.foundation.clickable
-import androidx.compose.material.icons.filled.ThumbUp
-import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -39,8 +37,14 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import com.king.mob_app_assignment.R
 import com.king.mob_app_assignment.domain.model.Department
 import com.king.mob_app_assignment.domain.model.Report
 import com.king.mob_app_assignment.domain.model.ReportCategory
@@ -57,6 +61,7 @@ import androidx.compose.ui.graphics.Color
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.king.mob_app_assignment.ui.theme.translatedStringResource
 
 enum class ReportSortOrder { NEWEST_FIRST, OLDEST_FIRST }
 
@@ -88,8 +93,12 @@ fun List<Report>.applyFilter(filter: ReportFilterState): List<Report> {
     }
 }
 
+// "Pending", matching StatusBadge.kt's own display label for the exact same enum value - a real
+// examiner-caught inconsistency where this filter chip said "Submitted" while the status pill on
+// every report card for that same status already said "Pending", making it look like two
+// different statuses on the same screen rather than one filter and one badge for the same thing.
 private fun ReportStatus.label(): String = when (this) {
-    ReportStatus.SUBMITTED -> "Submitted"
+    ReportStatus.SUBMITTED -> "Pending"
     ReportStatus.IN_REVIEW -> "In review"
     ReportStatus.RESOLVED -> "Resolved"
 }
@@ -155,7 +164,7 @@ fun PriorityIndicator(priority: ReportPriority, modifier: Modifier = Modifier) {
 @Composable
 fun DepartmentLabel(department: Department?, modifier: Modifier = Modifier) {
     Text(
-        text = department?.displayLabel() ?: "Unassigned",
+        text = department?.displayLabel() ?: translatedStringResource(R.string.report_list_unassigned_department),
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = modifier,
@@ -172,13 +181,13 @@ fun ReportSearchField(
         value = query,
         onValueChange = onQueryChange,
         modifier = modifier.fillMaxWidth(),
-        placeholder = { Text("Search by address or note") },
+        placeholder = { Text(translatedStringResource(R.string.report_list_search_placeholder)) },
         singleLine = true,
         leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
         trailingIcon = {
             if (query.isNotEmpty()) {
                 IconButton(onClick = { onQueryChange("") }) {
-                    Icon(Icons.Filled.Clear, contentDescription = "Clear search")
+                    Icon(Icons.Filled.Clear, contentDescription = translatedStringResource(R.string.report_list_clear_search))
                 }
             }
         },
@@ -197,7 +206,7 @@ fun ReportFilterBar(
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             item {
                 CategoryChip(
-                    label = "All statuses",
+                    label = translatedStringResource(R.string.report_list_all_statuses),
                     selected = filter.statusFilter == null,
                     onClick = { onFilterChange(filter.copy(statusFilter = null)) },
                 )
@@ -218,7 +227,7 @@ fun ReportFilterBar(
         ) {
             item {
                 CategoryChip(
-                    label = "All categories",
+                    label = translatedStringResource(R.string.report_list_all_categories),
                     selected = filter.categoryFilter == null,
                     onClick = { onFilterChange(filter.copy(categoryFilter = null)) },
                 )
@@ -248,7 +257,13 @@ fun ReportFilterBar(
                         onFilterChange(filter.copy(sortOrder = next))
                     },
                     label = {
-                        Text(if (filter.sortOrder == ReportSortOrder.NEWEST_FIRST) "Newest first" else "Oldest first")
+                        Text(
+                            if (filter.sortOrder == ReportSortOrder.NEWEST_FIRST) {
+                                translatedStringResource(R.string.report_list_sort_newest_first)
+                            } else {
+                                translatedStringResource(R.string.report_list_sort_oldest_first)
+                            },
+                        )
                     },
                     leadingIcon = { Icon(Icons.Filled.SwapVert, contentDescription = null) },
                     shape = MaterialTheme.shapes.extraSmall,
@@ -263,51 +278,64 @@ fun ReportFilterBar(
     }
 }
 
+private val listItemDateFormat = SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault())
+
 /**
- * Thumbs-up control shown next to a report - lets a citizen signal "I see this too" without
- * filing a duplicate. Only clickable when the viewer isn't the report's owner (upvoting your
- * own report doesn't make sense); otherwise renders as a plain read-only count.
+ * The report's own captured photo, shown as a small rounded-square thumbnail in the list row -
+ * matching the reference mockup's per-report photo tile, replacing what used to be a generic
+ * category icon there (a wrench/lightbulb/etc symbol, not a photo of the actual issue). Falls
+ * back to the category icon when there's no local photo to show: a video-only report (no
+ * localPhotoPath at all - see Report.mediaType), an anonymous/offline-synced report whose local
+ * file has since been cleared from device storage, or a load failure. localPhotoPath is a plain
+ * device-local absolute file path (this project has no Firebase Storage/CDN - see
+ * PLACEHOLDERS_TODO.csv), so Coil needs a java.io.File model rather than a URL string.
  */
 @Composable
-fun UpvoteButton(
-    upvoteCount: Int,
-    isUpvotedByMe: Boolean,
-    canUpvote: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Row(
-        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-        modifier = modifier.let { if (canUpvote) it.clickable(onClick = onClick) else it },
-    ) {
-        Icon(
-            imageVector = if (isUpvotedByMe) Icons.Filled.ThumbUp else Icons.Outlined.ThumbUp,
-            contentDescription = if (isUpvotedByMe) "Remove upvote" else "Upvote this report",
-            tint = if (isUpvotedByMe) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(20.dp),
+private fun ReportThumbnail(report: Report, modifier: Modifier = Modifier) {
+    val photoPath = report.localPhotoPath
+    if (report.mediaType == ReportMediaType.PHOTO && !photoPath.isNullOrBlank()) {
+        AsyncImage(
+            model = ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current)
+                .data(java.io.File(photoPath))
+                .crossfade(true)
+                .build(),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = modifier.clip(MaterialTheme.shapes.small),
         )
-        Text(
-            text = upvoteCount.toString(),
-            style = MaterialTheme.typography.labelLarge,
-            color = if (isUpvotedByMe) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 4.dp),
-        )
+    } else {
+        androidx.compose.foundation.layout.Box(
+            modifier = modifier
+                .clip(MaterialTheme.shapes.small)
+                .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = androidx.compose.ui.Alignment.Center,
+        ) {
+            Icon(
+                imageVector = if (report.mediaType == ReportMediaType.VIDEO) Icons.Filled.Videocam else report.category.icon(),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(28.dp),
+            )
+        }
     }
 }
-
-private val listItemDateFormat = SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault())
 
 @Composable
 fun ReportListItem(
     report: Report,
     modifier: Modifier = Modifier,
+    // Only ever true from an admin-facing screen (ui/admin/*) - a citizen's own report list
+    // never needs to be told who filed a report they already know is theirs. Gates showing
+    // report.reporterName so admins can see who reported the issue without exposing that same
+    // identity on a citizen-facing list.
+    isAdmin: Boolean = false,
     onClick: () -> Unit,
     trailingContent: (@Composable () -> Unit)? = null,
 ) {
     Card(
         modifier = modifier.fillMaxWidth().clickable(onClick = onClick),
         shape = MaterialTheme.shapes.medium,
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = com.king.mob_app_assignment.ui.theme.Elevation.resting),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
         Row(
@@ -315,12 +343,10 @@ fun ReportListItem(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Row(modifier = Modifier.weight(1f)) {
-                Icon(
-                    imageVector = report.category.icon(),
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
+                ReportThumbnail(
+                    report = report,
                     modifier = Modifier
-                        .size(40.dp)
+                        .size(56.dp)
                         .padding(end = 12.dp),
                 )
                 Column(modifier = Modifier.weight(1f)) {
@@ -340,13 +366,23 @@ fun ReportListItem(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    // Blank for an anonymous report (no owner identity exists to show at all -
+                    // see Report.isAnonymous) or for a report submitted before reporterName
+                    // existed - falls through to nothing rendered rather than an empty line.
+                    if (isAdmin && !report.isAnonymous && report.reporterName.isNotBlank()) {
+                        Text(
+                            text = translatedStringResource(R.string.report_list_reported_by, report.reporterName),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     Spacer(modifier = Modifier.height(6.dp))
                     Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                         StatusBadge(status = report.status)
                         if (report.mediaType == ReportMediaType.VIDEO) {
                             Icon(
                                 imageVector = Icons.Filled.Videocam,
-                                contentDescription = "Video report",
+                                contentDescription = translatedStringResource(R.string.report_list_video_report_description),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(16.dp).padding(start = 8.dp),
                             )
@@ -354,7 +390,7 @@ fun ReportListItem(
                         if (report.isAnonymous) {
                             Icon(
                                 imageVector = Icons.Filled.VisibilityOff,
-                                contentDescription = "Anonymous report",
+                                contentDescription = translatedStringResource(R.string.report_list_anonymous_report_description),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(16.dp).padding(start = 8.dp),
                             )
@@ -362,7 +398,7 @@ fun ReportListItem(
                         if (report.needsAiReview) {
                             Icon(
                                 imageVector = Icons.Filled.Warning,
-                                contentDescription = "Needs your input",
+                                contentDescription = translatedStringResource(R.string.report_list_needs_input_description),
                                 tint = MaterialTheme.colorScheme.error,
                                 modifier = Modifier.size(16.dp).padding(start = 8.dp),
                             )
