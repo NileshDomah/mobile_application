@@ -56,9 +56,23 @@ class BootShakeReceiver : BroadcastReceiver() {
  */
 fun startShakeService(context: Context) {
     val intent = Intent(context, ShakeBackgroundService::class.java)
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        ContextCompat.startForegroundService(context, intent)
-    } else {
-        context.startService(intent)
+    try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            ContextCompat.startForegroundService(context, intent)
+        } else {
+            context.startService(intent)
+        }
+    } catch (e: Exception) {
+        // BUG FIX (2026-11-18, found via real-device testing - crashed on every app restart
+        // after an install/update): android.app.ForegroundServiceStartNotAllowedException (API
+        // 31+) is thrown when the calling context isn't itself foreground at the exact moment of
+        // the call - both call sites here (boot, and MobAppAssignment's own restart-if-enabled
+        // check on process start) run from exactly that kind of background context, and Android
+        // does not guarantee this attempt will be allowed to succeed on every OS version/device.
+        // Letting that propagate crashed the whole process immediately after every install -
+        // a much worse outcome than silently not restarting the service, since the user can
+        // simply reopen the app to get it running again (RootNavGraph's own flows already handle
+        // "service not currently running" gracefully - this was never the only way it starts).
+        com.king.mob_app_assignment.util.CrashReporter.recordException(e)
     }
 }

@@ -61,11 +61,12 @@ import kotlin.math.sqrt
 // high-frequency noise is smoothed out rather than being treated as a candidate reversal.
 //
 // Efficiency improvement: the sensor is registered at a caller-chosen sampling delay rather than
-// a single hardcoded rate - the foreground (in-app) listener still uses SENSOR_DELAY_GAME for
-// responsiveness, but ShakeBackgroundService now registers at the much lower-power
-// SENSOR_DELAY_NORMAL, since a background listener reacting to a deliberate physical shake has
-// no real need for game-loop-grade sampling and the lower rate meaningfully reduces the CPU/
-// battery cost of running this indefinitely in a foreground service.
+// a single hardcoded rate - the foreground (in-app) listener uses SENSOR_DELAY_GAME for
+// responsiveness. ShakeBackgroundService originally used SENSOR_DELAY_NORMAL (~5Hz) to save
+// battery, but that turned out to be too slow to reliably catch a real shake gesture's actual
+// peaks (confirmed via dumpsys sensorservice - see ShakeBackgroundService's own 2026-11-18 fix
+// note) and now uses SENSOR_DELAY_UI (~16Hz) instead - still lower-power than the foreground
+// case, but fast enough to actually detect the shake it's meant to.
 //
 // Concurrency fix (2026-09): this used to be the SensorEventListener itself, with all detection
 // state (onShake callback, filter baseline, reversal counters, proximity state) stored directly
@@ -258,7 +259,16 @@ class ShakeDetector @Inject constructor(
         // not working at all on a throttled device.
         const val WINDOW_MS = 1500L
         const val DEBOUNCE_MS = 1500L
-        const val MIN_REVERSALS = 2
+
+        // Raised 2 -> 3 (2026-11-20, user-reported "I just moved the phone a little and it opened
+        // the camera" - ordinary handling like picking the phone up off a table, not a deliberate
+        // shake). 2 threshold-crossings within WINDOW_MS is also what a single abrupt pickup
+        // produces (one crossing on the initial jerk, a second on the moment it settles/stops) -
+        // nothing about that sequence is specific to shaking. A real shake gesture is a repeated
+        // back-and-forth motion, so it keeps crossing the threshold several times within the same
+        // window; requiring a third crossing filters out single-jerk handling while still letting
+        // an actual shake (which produces many crossings, not just two) through easily.
+        const val MIN_REVERSALS = 3
 
         // Smoothing factor for the exponential low-pass filter, 0..1 - lower values smooth more
         // aggressively (more noise rejection, slightly more lag before a real shake registers).

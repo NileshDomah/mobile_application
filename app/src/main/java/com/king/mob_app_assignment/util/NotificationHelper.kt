@@ -157,6 +157,34 @@ class NotificationHelper @Inject constructor(
         NotificationManagerCompat.from(context).notify(reportId.hashCode() + 2, notification)
     }
 
+    // BUG FIX (found via user report, 2026-11-18): ClassificationWorker used to call
+    // notifyClassificationSucceeded for the FLAGGED outcome too, using the AI's own unconfident
+    // guess as "category" - that notification said "We identified this as Pothole" in confident,
+    // past-tense wording, but FLAGGED is specifically the case where AiReviewCoordinator did NOT
+    // apply that category to the report (see its own doc comment and flagForAiReview, which only
+    // ever writes needsAiReview/aiSuggestedCategory, never the real category field) - the report
+    // itself stayed UNCATEGORIZED, visibly contradicting what the notification just said. This is
+    // the honest, separate wording for that case: a suggestion the user still needs to confirm,
+    // not a fact about what the report now says.
+    fun notifyClassificationNeedsReview(reportId: String, suggestedCategory: String) {
+        if (!hasPostNotificationPermission()) return
+        if (!runBlocking { shakePreferences.notifyAiClassificationFlow.first() }) return
+
+        val reference = reportReferenceCode(reportId)
+        val contentText = "We think this might be $suggestedCategory, but we're not sure - tap to confirm or pick the right category for $reference."
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_stat_notification)
+            .setContentTitle("Help us categorize - $reference")
+            .setContentText(contentText)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(contentText))
+            .setContentIntent(contentIntentFor(Destinations.reportDetail(reportId)))
+            .setAutoCancel(true)
+            .build()
+
+        NotificationManagerCompat.from(context).notify(reportId.hashCode() + 2, notification)
+    }
+
     // Fired locally on an admin's own device when their live support-inbox listener sees a new
     // OPEN message arrive while the app is running in the background - see
     // AdminSupportNotifier.kt for the "only messages newer than when this collector started"

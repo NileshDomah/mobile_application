@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Row
 import androidx.compose.material.icons.Icons
@@ -80,12 +82,21 @@ fun ProfileScreen(
     Scaffold(
         topBar = { AppTopBar(title = translatedStringResource(R.string.profile_title)) },
     ) { padding ->
-        // Fits on-screen without scrolling by design (explicit request) - every element below is
-        // sized/padded compactly rather than left at each component's original larger spacing,
-        // and the whole Column is weighted against the screen height so it never needs to grow
-        // past what's visible. If a future addition doesn't fit on a very small/large-text-scale
-        // device, tighten spacing further here rather than reintroducing verticalScroll.
-        Column(modifier = Modifier.fillMaxSize().padding(padding).padding(12.dp)) {
+        // BUG FIX 2026-10-08: this was previously a fixed, non-scrolling Column (compact spacing
+        // by explicit earlier request, intended to fit every device without a scrollbar). On a
+        // real device with a smaller screen, a larger system font-scale setting, or extra space
+        // taken by a gesture-navigation bar, that assumption broke - the Logout button landed
+        // below the visible viewport with no way to reach it at all. verticalScroll is a safety
+        // net, not a reversal of the original compact-spacing intent: on a screen tall enough for
+        // everything to already fit, nothing visibly scrolls: it is only reachable at all should
+        // content run taller than the viewport, which is exactly the case this fixes.
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(12.dp),
+        ) {
             // The profile header sits on a gradient wash rather than a flat surfaceVariant fill -
             // the same civic-blue-to-teal hero treatment used on the auth screens, so a signed-in
             // citizen's own "home base" screen carries some of that same brand presence.

@@ -146,8 +146,16 @@ fun IncidentDetailScreen(
             }
 
             Text(text = translatedStringResource(R.string.incident_detail_status_title), style = MaterialTheme.typography.titleMedium)
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(IncidentStatus.entries) { status ->
+            // BUG FIX (found via manual testing, 2026-11-20): LazyRow clipped the last chip off
+            // the screen edge with no scroll hint - same pattern fixed elsewhere (ReportDetail's
+            // category/department rows, CaptureScreen's CategorySection, the Map legend). Fixed
+            // sets of chips wrap via FlowRow instead of clipping.
+            @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                IncidentStatus.entries.forEach { status ->
                     CategoryChip(
                         label = status.displayLabel(),
                         selected = incident.status == status,
@@ -172,8 +180,12 @@ fun IncidentDetailScreen(
             }
 
             Text(text = translatedStringResource(R.string.incident_detail_department_title), style = MaterialTheme.typography.titleMedium)
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(Department.entries.toList()) { department ->
+            @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Department.entries.forEach { department ->
                     CategoryChip(
                         label = department.displayLabel(),
                         selected = incident.department == department,

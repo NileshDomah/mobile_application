@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -73,11 +74,43 @@ fun MyReportsScreen(
     val solved = uiState.reports.filter { it.status == ReportStatus.RESOLVED }
     val visibleReports = if (selectedTab == 0) notSolved else solved
 
+    // BUG FIX (2026-11-20, user-reported "if I'm already in the app I will never know which
+    // report has to be reviewed" - the AI-disagreement flag only ever reached the user via a push
+    // notification, with nothing surfacing it while just browsing My Reports): pulled every
+    // needsAiReview report (regardless of which Solved/Not Solved tab it would otherwise sort
+    // into - review is still needed either way) into its own section ABOVE the tabs, so it's the
+    // first thing visible on this screen rather than something you'd have to notice a small icon
+    // for while scrolling through an unrelated tab.
+    //
+    // BUG FIX (2026-11-21, user-reported "if the reports had been resolved they don't need AI
+    // suggestion"): excludes RESOLVED reports from this section - once a report is fixed, the
+    // category is no longer actionable for the citizen regardless of whether the flag was ever
+    // cleared, so it shouldn't occupy the "needs your attention" section at the top of the screen.
+    val needsReview = uiState.reports.filter { it.needsAiReview && it.status != ReportStatus.RESOLVED }
+
     Scaffold(
         topBar = { AppTopBar(title = translatedStringResource(R.string.my_reports_title)) },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            if (needsReview.isNotEmpty()) {
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    Text(
+                        text = translatedStringResource(R.string.my_reports_needs_review_section, needsReview.size),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(top = 8.dp),
+                    ) {
+                        needsReview.forEach { report ->
+                            ReportListItem(report = report, onClick = { onReportClick(report) })
+                        }
+                    }
+                }
+            }
+
             TabRow(selectedTabIndex = selectedTab) {
                 Tab(
                     selected = selectedTab == 0,

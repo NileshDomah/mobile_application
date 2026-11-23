@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material3.ButtonDefaults
@@ -95,6 +97,25 @@ fun HomeScreen(
             context.stopService(Intent(context, ShakeBackgroundService::class.java))
             return
         }
+        // BUG FIX (2026-11-18, real-device testing): confirmed via live logcat that neither a
+        // bare startActivity() nor the ActivityOptions BAL opt-in nor a full-screen-intent
+        // notification (this Samsung/OneUI build doesn't auto-present FSI for a non-telecom app
+        // even with every official precondition met - canUseFullScreenIntent() true, HIGH
+        // channel) actually opens the camera from the background service on this device/Android
+        // version. SYSTEM_ALERT_WINDOW ("draw over other apps") is the one remaining mechanism
+        // Android still exempts from BAL - an app holding it has a real visible overlay window,
+        // satisfying the callingUidHasNonAppVisibleWindow check the BAL decision logcat already
+        // showed mattering. Requested here (once, when the user turns this feature ON) rather
+        // than at app startup, since it's only needed for this specific feature, not core to the
+        // app the way Camera/Location are.
+        if (!android.provider.Settings.canDrawOverlays(context)) {
+            context.startActivity(
+                Intent(
+                    android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    android.net.Uri.parse("package:${context.packageName}"),
+                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }
         if (PermissionManager.isGranted(context, AppPermission.NOTIFICATIONS)) {
             viewModel.setBackgroundShakeEnabled(true)
             startShakeService(context)
@@ -105,10 +126,17 @@ fun HomeScreen(
 
     Scaffold(contentWindowInsets = WindowInsets(0, 0, 0, 0)) { padding ->
         Column(
+            // BUG FIX (found via manual testing, 2026-11-18): this Column had no scroll modifier,
+            // so on a real device its content (hero illustration + buttons + "Shake in
+            // background" card) was taller than the space actually available once the status bar
+            // and bottom nav bar insets were subtracted - Compose's fixed-height layout squeezed
+            // the last card down to a few pixels tall instead of letting it overflow scrollably,
+            // clipping its description text to an unreadable sliver every time Home loaded.
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
                 .statusBarsPadding()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = Spacing.lg),
         ) {
             Text(
@@ -198,10 +226,12 @@ fun HomeScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(text = "Shake in background", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            text = "Detect a shake even when the app is closed. Shows a persistent " +
-                                "notification while active, and uses more battery.",
+                            text = translatedStringResource(R.string.settings_shake_in_background_title),
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Text(
+                            text = translatedStringResource(R.string.settings_shake_in_background_description),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(top = 4.dp),

@@ -124,13 +124,22 @@ private fun CreateWorkOrderDialog(
         text = {
             Column {
                 Text(text = translatedStringResource(R.string.work_orders_department_label), style = MaterialTheme.typography.labelLarge)
-                LazyRow(modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)) {
-                    items(Department.entries.toList()) { dept ->
+                // BUG FIX (found via manual testing, 2026-11-20): LazyRow clipped the last
+                // department chip off the edge with no scroll hint - worse here since an
+                // AlertDialog is narrower than a full screen, so even fewer chips fit before
+                // clipping. FlowRow wraps instead, matching the fix applied to every other
+                // fixed-set chip row in the app.
+                @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+                androidx.compose.foundation.layout.FlowRow(
+                    modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Department.entries.forEach { dept ->
                         CategoryChip(
                             label = dept.displayLabel(),
                             selected = department == dept,
                             onClick = { department = if (department == dept) null else dept },
-                            modifier = Modifier.padding(end = 8.dp),
                         )
                     }
                 }

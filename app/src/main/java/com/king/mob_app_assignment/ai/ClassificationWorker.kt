@@ -49,11 +49,23 @@ class ClassificationWorker @AssistedInject constructor(
         }
 
         return when (result?.outcome) {
-            AiReviewOutcome.AUTO_CATEGORIZED, AiReviewOutcome.CONFIRMED, AiReviewOutcome.FLAGGED -> {
+            AiReviewOutcome.AUTO_CATEGORIZED, AiReviewOutcome.CONFIRMED -> {
                 // "Tell me whether the AI could classify this or not" - fires even if the app is
                 // fully closed, same as notifyClassificationFailed below, since this runs inside
-                // a WorkManager job rather than a plain in-process coroutine.
+                // a WorkManager job rather than a plain in-process coroutine. Only these two
+                // outcomes actually wrote result.category to the report (see AiReviewCoordinator) -
+                // this notification's confident wording is only accurate for them.
                 result.category?.let { notificationHelper.notifyClassificationSucceeded(reportId, it.name) }
+                Result.success()
+            }
+            AiReviewOutcome.FLAGGED -> {
+                // BUG FIX (found via user report, 2026-11-18): previously fell into the same
+                // branch as AUTO_CATEGORIZED/CONFIRMED and sent the same confident "We identified
+                // this as X" notification - but FLAGGED means the AI's guess was NOT applied to
+                // the report (flagForAiReview only ever writes needsAiReview/aiSuggestedCategory,
+                // never the real category field), so the report stayed UNCATEGORIZED while the
+                // notification claimed a definite category - a direct, visible contradiction.
+                result.category?.let { notificationHelper.notifyClassificationNeedsReview(reportId, it.name) }
                 Result.success()
             }
             AiReviewOutcome.FAILED, null -> {

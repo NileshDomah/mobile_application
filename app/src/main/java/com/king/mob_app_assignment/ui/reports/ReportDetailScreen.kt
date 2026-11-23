@@ -242,30 +242,76 @@ fun ReportDetailScreen(
                     }
                 }
 
-                // Admin-hidden: this card and its "review and resubmit" action are meaningful
-                // only to the citizen who owns the report (they're the one being asked to pick a
-                // category) - an admin viewing the same report has no use for it, and its wording
-                // ("choose the correct category yourself and add a note, then resubmit") doesn't
-                // make sense addressed to anyone else.
-                if (report.needsAiReview && !uiState.isEditing && !uiState.isAdmin) {
+                // Admin-hidden: this card and its actions are meaningful only to the citizen who
+                // owns the report (they're the one being asked to confirm/correct a category) -
+                // an admin viewing the same report has no use for it.
+                //
+                // BUG FIX (2026-11-21, user-reported "if the report has been resolved they don't
+                // need AI suggestion"): a resolved report can still have needsAiReview=true if it
+                // was flagged and then resolved before the citizen ever responded (an admin can
+                // resolve a report regardless of this flag - the two are independent). Once a
+                // report is RESOLVED the category is moot for the citizen's purposes - the issue
+                // is already fixed - so this card has no useful action left to offer and is
+                // suppressed outright rather than asking the user to categorize an already-closed
+                // report.
+                if (report.needsAiReview && report.status != ReportStatus.RESOLVED && !uiState.isEditing && !uiState.isAdmin) {
                     Column {
-                        // Deliberately does not surface the AI's own low-confidence guess (e.g.
-                        // "Other" vs "Uncategorized") - that phrasing read as the AI contradicting
-                        // the user's own choice rather than admitting it couldn't tell, which was
-                        // confusing. Always frames this as "the AI couldn't categorize it, please
-                        // choose yourself" regardless of whether aiSuggestedCategory is set.
+                        // BUG FIX (2026-11-20, user feedback: "when I open it I want an option to
+                        // accept the AI suggestion or go with my own" - this card used to always
+                        // say "the AI couldn't categorize it, please choose yourself" and offer
+                        // only one path out (a full edit form), even when aiSuggestedCategory WAS
+                        // set and the citizen just wanted to agree with it in one tap, or
+                        // explicitly keep their own pick. Now shows the AI's actual suggestion
+                        // when one exists (consistent with the same suggestion already being shown
+                        // in the My Reports list banner - see ReportListComponents.kt), with a
+                        // direct accept/keep choice; falls back to the old low-confidence wording
+                        // only when the AI genuinely couldn't produce a suggestion at all.
+                        val suggestedLabel = report.aiSuggestedCategory?.let {
+                            if (it == ReportCategory.CUSTOM && report.aiSuggestedCustomLabel.isNotBlank()) {
+                                report.aiSuggestedCustomLabel
+                            } else {
+                                it.displayLabel()
+                            }
+                        }
                         InfoCard(
                             title = translatedStringResource(R.string.report_detail_ai_review_title),
-                            message = translatedStringResource(R.string.report_detail_ai_review_message),
+                            message = if (suggestedLabel != null) {
+                                translatedStringResource(R.string.report_detail_ai_review_message_with_suggestion, suggestedLabel)
+                            } else {
+                                translatedStringResource(R.string.report_detail_ai_review_message)
+                            },
                             icon = Icons.Filled.WarningAmber,
                             severity = InfoCardSeverity.Warning,
                         )
                         if (uiState.isOwner) {
-                            PrimaryActionButton(
-                                text = translatedStringResource(R.string.report_detail_review_and_resubmit),
-                                onClick = viewModel::startEditing,
-                                modifier = Modifier.padding(top = 12.dp),
-                            )
+                            if (report.aiSuggestedCategory != null) {
+                                PrimaryActionButton(
+                                    text = translatedStringResource(R.string.report_detail_accept_ai_suggestion, suggestedLabel.orEmpty()),
+                                    onClick = viewModel::acceptAiSuggestion,
+                                    enabled = !uiState.isSaving,
+                                    modifier = Modifier.padding(top = 12.dp).fillMaxWidth(),
+                                )
+                                OutlinedButton(
+                                    onClick = viewModel::keepMyCategory,
+                                    enabled = !uiState.isSaving,
+                                    modifier = Modifier.padding(top = 8.dp).fillMaxWidth(),
+                                ) {
+                                    Text(translatedStringResource(R.string.report_detail_keep_my_category, report.categoryDisplayText()))
+                                }
+                                TextButton(
+                                    onClick = viewModel::startEditing,
+                                    enabled = !uiState.isSaving,
+                                    modifier = Modifier.padding(top = 4.dp).fillMaxWidth(),
+                                ) {
+                                    Text(translatedStringResource(R.string.report_detail_edit_manually))
+                                }
+                            } else {
+                                PrimaryActionButton(
+                                    text = translatedStringResource(R.string.report_detail_review_and_resubmit),
+                                    onClick = viewModel::startEditing,
+                                    modifier = Modifier.padding(top = 12.dp),
+                                )
+                            }
                         }
                     }
                 }
@@ -522,8 +568,17 @@ private fun EditReportSection(
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(text = translatedStringResource(R.string.report_detail_edit_heading), style = MaterialTheme.typography.headlineSmall)
 
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(ReportCategory.selectableEntries) { category ->
+        // BUG FIX (found via manual testing, 2026-11-20): a LazyRow here clipped the last
+        // category chip off the edge of the screen with no scroll hint - same pattern already
+        // fixed in CaptureScreen's CategorySection, the Map legend, and the admin report
+        // filters. ReportCategory.selectableEntries is a small, fixed set, so FlowRow wrapping
+        // is simpler and more discoverable than a scroll affordance.
+        @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+        androidx.compose.foundation.layout.FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            ReportCategory.selectableEntries.forEach { category ->
                 CategoryChip(
                     label = category.displayLabel(),
                     selected = selectedCategory == category,
@@ -605,8 +660,15 @@ private fun AdminWorkflowSection(
             Text(text = translatedStringResource(R.string.report_detail_admin_workflow_title), style = MaterialTheme.typography.titleMedium)
 
             Text(text = translatedStringResource(R.string.report_detail_department_label), style = MaterialTheme.typography.labelLarge)
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(Department.entries.toList()) { department ->
+            // BUG FIX (found via manual testing, 2026-11-20): same LazyRow clipping pattern as
+            // above - Department.entries is a small, fixed set (Roads/Sanitation/Electrical/
+            // Water/Other), so FlowRow wrapping beats a scroll affordance here too.
+            @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Department.entries.forEach { department ->
                     CategoryChip(
                         label = department.displayLabel(),
                         selected = currentDepartment == department,

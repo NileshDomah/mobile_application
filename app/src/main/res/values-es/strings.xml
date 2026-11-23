@@ -52,6 +52,11 @@
 
     <!-- Settings screen -->
     <string name="settings_title">Configuración</string>
+    <string name="settings_shake_in_background_title">Agitar en segundo plano</string>
+    <string name="settings_shake_in_background_description">Detecta una agitación incluso cuando la aplicación está cerrada. Muestra una notificación persistente mientras está activa y consume más batería.</string>
+    <string name="settings_biometric_title">Inicio de sesión biométrico</string>
+    <string name="settings_biometric_disable_description">Desactiva el inicio de sesión con huella o rostro en este dispositivo. Puedes volver a activarlo en cualquier momento con tu contraseña.</string>
+    <string name="settings_biometric_enable_description">Inicia sesión con tu huella o rostro en lugar de escribir tu contraseña cada vez.</string>
     <string name="settings_shake_sensitivity_title">Sensibilidad de agitación</string>
     <string name="settings_shake_sensitivity_description">Menor = más sensible (más fácil de activar un informe al agitar). Mayor = requiere una agitación más fuerte.</string>
     <string name="settings_current_threshold">Umbral actual: %1$d</string>
@@ -98,6 +103,7 @@
     <!-- My Reports screen -->
     <string name="my_reports_title">Mis informes</string>
     <string name="my_reports_retry">Reintentar</string>
+    <string name="my_reports_needs_review_section">Necesita tu revisión (%1$d)</string>
     <string name="my_reports_tab_not_solved">Sin resolver (%1$d)</string>
     <string name="my_reports_tab_solved">Resueltos (%1$d)</string>
     <string name="my_reports_empty_not_solved">No hay informes sin resolver: cualquier informe que envíes aparecerá aquí hasta que se resuelva.</string>
@@ -142,6 +148,10 @@
     <string name="report_detail_anonymous_label">Enviado de forma anónima</string>
     <string name="report_detail_ai_review_title">Se necesita revisión de la IA</string>
     <string name="report_detail_ai_review_message">Nuestra IA no pudo clasificar esta foto. Elige tú mismo la categoría correcta y añade una nota, luego vuelve a enviarlo.</string>
+    <string name="report_detail_ai_review_message_with_suggestion">Nuestra IA cree que esto parece \"%1$s\", diferente de la categoría que elegiste. Acepta la sugerencia de la IA, mantén la tuya, o edita el informe tú mismo.</string>
+    <string name="report_detail_accept_ai_suggestion">Aceptar sugerencia de la IA (%1$s)</string>
+    <string name="report_detail_keep_my_category">Mantener mi categoría (%1$s)</string>
+    <string name="report_detail_edit_manually">Editar manualmente</string>
     <string name="report_detail_review_and_resubmit">Revisar y reenviar</string>
     <string name="report_detail_location_label">Ubicación</string>
     <string name="report_detail_address_unavailable">Dirección no disponible</string>
@@ -185,6 +195,7 @@
     <string name="report_list_anonymous_report_description">Informe anónimo</string>
     <string name="report_list_reported_by">Reportado por %1$s</string>
     <string name="report_list_needs_input_description">Necesita tu atención</string>
+    <string name="report_list_ai_suggests_category">La IA sugiere: %1$s - toca para revisar</string>
     <string name="report_list_unassigned_department">Sin asignar</string>
 
     <!-- Status timeline card -->

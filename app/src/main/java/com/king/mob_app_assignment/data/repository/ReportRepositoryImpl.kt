@@ -145,6 +145,10 @@ class ReportRepositoryImpl @Inject constructor(
         awaitClose { listener.remove() }
     }
 
+    override suspend fun getReportOnce(id: String): Report? = runCatching {
+        reportsCollection.document(id).get().await().toReportOrNull()
+    }.getOrNull()
+
     override suspend fun updateReportStatus(id: String, status: ReportStatus): Result<Unit> = runCatching {
         reportsCollection.document(id)
             .update(

@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -102,7 +101,13 @@ fun ChatScreen(
             )
         },
     ) { padding ->
-        Column(modifier = Modifier.fillMaxSize().padding(padding).imePadding()) {
+        // BUG FIX (found via manual testing, 2026-11-17): Scaffold already reserves IME space in
+        // its own contentWindowInsets by default - adding imePadding() here on top of that double-
+        // applied the IME inset, which pushed this Column (and the input row's Send button inside
+        // it) up past its own topBar's reserved space and under the status bar once the keyboard
+        // opened, putting Send in the status bar's own gesture-interception zone where taps never
+        // reached it at all - the chat couldn't be used with the on-screen keyboard.
+        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             if (uiState.messages.isEmpty()) {
                 // weight(1f), not fillMaxSize() - a fillMaxSize() child inside a plain Column
                 // claims the ENTIRE column height (no room left for the input Row below), which

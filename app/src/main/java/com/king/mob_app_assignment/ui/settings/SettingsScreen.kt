@@ -203,10 +203,12 @@ fun SettingsScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(text = "Shake in background", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            text = "Detect a shake even when the app is closed. Shows a persistent " +
-                                "notification while active, and uses more battery.",
+                            text = translatedStringResource(R.string.settings_shake_in_background_title),
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Text(
+                            text = translatedStringResource(R.string.settings_shake_in_background_description),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(top = 4.dp),
@@ -285,14 +287,15 @@ fun SettingsScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(text = "Biometric sign-in", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            text = translatedStringResource(R.string.settings_biometric_title),
+                            style = MaterialTheme.typography.titleMedium,
+                        )
                         Text(
                             text = when {
                                 !biometricAvailable -> biometricUnavailableReason.orEmpty()
-                                biometricLoginEnabled -> "Turn off fingerprint/face sign-in on this device. " +
-                                    "You can re-enable it anytime with your password."
-                                else -> "Sign in with your fingerprint or face instead of typing your " +
-                                    "password every time."
+                                biometricLoginEnabled -> translatedStringResource(R.string.settings_biometric_disable_description)
+                                else -> translatedStringResource(R.string.settings_biometric_enable_description)
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,

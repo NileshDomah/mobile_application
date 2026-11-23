@@ -30,6 +30,31 @@
          its own to make a real, deliberate shake never accumulate the required reversals within
          ShakeDetector's rolling window before it goes stale. -->
     <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
+    <!-- BUG FIX (2026-11-18, real-device testing confirmed shake detection itself works while
+         the app is closed, but the resulting camera launch was blocked by Android's background-
+         activity-launch restriction on Android 17/API 37 - the ActivityOptions opt-in this app
+         already sends is evaluated by the OS (confirmed via logcat: balAllowedByPiSender shows
+         ALLOW_BAL) but the overall verdict is still BAL_BLOCK, meaning the platform has tightened
+         this past where that opt-in alone is honored on recent Android versions. A full-screen
+         intent notification is a SEPARATE, still-fully-supported exemption (how incoming calls
+         and alarms present over a locked screen) - this permission is required to post one. A
+         previous attempt at this approach was abandoned without this permission declared AND
+         without the notification channel's importance raised to HIGH (see
+         ShakeBackgroundService's buildCaptureAlertNotification/CAPTURE_CHANNEL_ID) - either gap
+         alone is enough to make a full-screen intent silently never present, which is why that
+         attempt looked like a platform dead end rather than an incomplete implementation. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <!-- BUG FIX (2026-11-18, continued): the full-screen-intent notification above posts
+         correctly (confirmed: canUseFullScreenIntent() true, HIGH-importance channel,
+         setFullScreenIntent called) but this specific Samsung/OneUI build does not auto-present
+         it - it silently falls back to an ordinary tap-required notification, a known OneUI
+         behavior difference from stock Android. SYSTEM_ALERT_WINDOW ("draw over other apps") is
+         the one remaining mechanism Android genuinely still exempts from BAL - an app holding it
+         has a real visible overlay window, which is exactly what callingUidHasNonAppVisibleWindow
+         checks for in the BAL decision logcat already showed. Requires one-time user approval via
+         Settings.ACTION_MANAGE_OVERLAY_PERMISSION (cannot be silently granted) - see
+         StartupPermissionGate for where this is requested. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <uses-feature
         android:name="android.hardware.camera"

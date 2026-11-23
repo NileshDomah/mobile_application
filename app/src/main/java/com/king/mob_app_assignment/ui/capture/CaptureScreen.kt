@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import com.king.mob_app_assignment.ui.reports.displayLabel
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -187,6 +188,15 @@ fun CaptureScreen(
             viewModel.onPhotoCaptured(uri, file)
         } else {
             cameraWasCancelled = true
+            // SECURITY FIX (2026-11-18, alongside the shake-bypasses-app-lock feature): a shake
+            // that opens the camera but gets CANCELLED (back button, no photo taken) never
+            // reaches RequireDeviceUnlockOncePhotoCaptured's markShakeCaptureFinished() call - that
+            // only fires once a photo/video is actually captured. Without clearing the bypass
+            // here too, cancelling the camera would leave the app-lock PIN bypassed indefinitely
+            // for the rest of the session, a real gap in app-lock's whole purpose. Covers the
+            // viaShake entry point only in effect, since this bypass is only ever set true for a
+            // shake-triggered launch in the first place.
+            com.king.mob_app_assignment.util.AppLockSessionState.markShakeCaptureFinished()
         }
     }
 
@@ -490,6 +500,15 @@ private fun RequireDeviceUnlockOncePhotoCaptured(stage: CaptureStage) {
     LaunchedEffect(stage) {
         if (stage == CaptureStage.IDLE || hasRequestedUnlock) return@LaunchedEffect
         hasRequestedUnlock = true
+        // FEATURE (explicit user request, 2026-11-18): shake-triggered capture bypasses the
+        // app's own PIN lock screen while the camera is opening (see MainActivity's
+        // isShakeCaptureInProgress/needsAppLockUnlock) so the shake isn't silently swallowed
+        // behind it - this is the matching "ask for it afterward" half: the instant a photo/video
+        // is actually captured (same trigger as the system-keyguard dismiss request right below),
+        // the bypass ends, so AppLockScreen's overlay reappears in time to gate everything after
+        // this point (AI classification, editing, submit) exactly as it always has for every
+        // other entry into Capture.
+        com.king.mob_app_assignment.util.AppLockSessionState.markShakeCaptureFinished()
         val activity = context as? android.app.Activity ?: return@LaunchedEffect
         val keyguardManager = context.getSystemService(Context.KEYGUARD_SERVICE) as? android.app.KeyguardManager
             ?: return@LaunchedEffect
@@ -859,6 +878,7 @@ private fun CaptureMetadataCard(
 // Default state instead reads as "AI will handle this" (matching how the rest of the AI pipeline
 // already works: classification happens after submit, not on this screen) with a small text
 // button to expand into manual picking only for users who want to override it up front.
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun CategorySection(
     selectedCategory: ReportCategory?,
@@ -902,10 +922,23 @@ private fun CategorySection(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(bottom = 8.dp),
         )
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(ReportCategory.selectableEntries) { category ->
+        // BUG FIX (found via manual testing, 2026-11-17): a LazyRow here clipped the last
+        // category chip (WATER_LEAK) at the screen edge with no scroll-affordance (no fade, no
+        // arrow) to hint more categories existed off-screen - a user had no visual reason to
+        // suspect there was anything to swipe to, so that category was effectively undiscoverable
+        // without stumbling on it by accident. FlowRow wraps every chip onto as many lines as
+        // needed instead, so the full category set is always visible with no scrolling required.
+        androidx.compose.foundation.layout.FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            ReportCategory.selectableEntries.forEach { category ->
                 CategoryChip(
-                    label = category.name,
+                    // BUG FIX (found via manual testing, 2026-11-20): this used the raw enum
+                    // name (e.g. "WATER_LEAK") instead of the same displayLabel() every other
+                    // category chip in the app uses (e.g. Admin's report filters show "Water
+                    // leak") - inconsistent, shouty, and exposes an internal identifier to users.
+                    label = category.displayLabel(),
                     selected = selectedCategory == category,
                     onClick = { onCategorySelected(category) },
                 )

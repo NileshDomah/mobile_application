@@ -22,6 +22,12 @@ interface ReportRepository {
 
     fun getReportById(id: String): Flow<Report?>
 
+    // One-shot fetch (not a live listener) - used by AiReviewCoordinator to check a report's
+    // CURRENT state immediately before writing a classification result, so a slow/retried
+    // classification can't clobber a decision the user already made in the meantime (see that
+    // class's own doc comment on the needsAiReview re-flagging race this guards against).
+    suspend fun getReportOnce(id: String): Report?
+
     // Superseded by resolveWithNote for IN_REVIEW/RESOLVED transitions, which pairs the status
     // change with a required resolution note. Kept for any other status transition path.
     suspend fun updateReportStatus(id: String, status: ReportStatus): Result<Unit>

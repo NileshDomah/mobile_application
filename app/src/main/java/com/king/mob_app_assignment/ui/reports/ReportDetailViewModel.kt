@@ -132,6 +132,32 @@ class ReportDetailViewModel @Inject constructor(
         editStateFlow.value = editStateFlow.value.copy(isEditing = true)
     }
 
+    // BUG FIX (2026-11-20, user feedback: "when I open it I want an option to accept the AI
+    // suggestion or go with my own" - previously the ONLY path out of a flagged report was the
+    // full "Review and resubmit" edit form, even when the citizen just wanted to agree with (or
+    // dismiss) the AI's own suggestion with one tap). Both of these reuse the exact same
+    // resubmitAfterAiReview write the edit form's "save" already used (clears needsAiReview,
+    // records wasResubmittedAfterAiReview) - the only difference is which category/customLabel is
+    // passed, so there's no new repository method, just two new call sites.
+    fun acceptAiSuggestion() {
+        val report = uiState.value.report ?: return
+        val suggested = report.aiSuggestedCategory ?: return
+        viewModelScope.launch {
+            editStateFlow.value = editStateFlow.value.copy(isSaving = true)
+            reportRepository.resubmitAfterAiReview(reportId, suggested, report.note, report.aiSuggestedCustomLabel)
+            editStateFlow.value = editStateFlow.value.copy(isSaving = false)
+        }
+    }
+
+    fun keepMyCategory() {
+        val report = uiState.value.report ?: return
+        viewModelScope.launch {
+            editStateFlow.value = editStateFlow.value.copy(isSaving = true)
+            reportRepository.resubmitAfterAiReview(reportId, report.category, report.note, report.customLabel)
+            editStateFlow.value = editStateFlow.value.copy(isSaving = false)
+        }
+    }
+
     fun cancelEditing() {
         editStateFlow.value = editStateFlow.value.copy(isEditing = false)
     }

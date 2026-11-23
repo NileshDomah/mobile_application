@@ -52,6 +52,11 @@
 
     <!-- Settings screen -->
     <string name="settings_title">Paramètres</string>
+    <string name="settings_shake_in_background_title">Secouer en arrière-plan</string>
+    <string name="settings_shake_in_background_description">Détecte une secousse même lorsque l\'application est fermée. Affiche une notification persistante pendant son activité et consomme plus de batterie.</string>
+    <string name="settings_biometric_title">Connexion biométrique</string>
+    <string name="settings_biometric_disable_description">Désactive la connexion par empreinte ou visage sur cet appareil. Vous pouvez la réactiver à tout moment avec votre mot de passe.</string>
+    <string name="settings_biometric_enable_description">Connectez-vous avec votre empreinte ou votre visage au lieu de saisir votre mot de passe à chaque fois.</string>
     <string name="settings_shake_sensitivity_title">Sensibilité de secousse</string>
     <string name="settings_shake_sensitivity_description">Plus bas = plus sensible (déclenche un signalement plus facilement). Plus haut = nécessite une secousse plus forte.</string>
     <string name="settings_current_threshold">Seuil actuel : %1$d</string>
@@ -98,6 +103,7 @@
     <!-- My Reports screen -->
     <string name="my_reports_title">Mes signalements</string>
     <string name="my_reports_retry">Réessayer</string>
+    <string name="my_reports_needs_review_section">Nécessite votre révision (%1$d)</string>
     <string name="my_reports_tab_not_solved">Non résolus (%1$d)</string>
     <string name="my_reports_tab_solved">Résolus (%1$d)</string>
     <string name="my_reports_empty_not_solved">Aucun signalement non résolu - tout signalement que vous envoyez apparaîtra ici jusqu\'à sa résolution.</string>
@@ -142,6 +148,10 @@
     <string name="report_detail_anonymous_label">Envoyé anonymement</string>
     <string name="report_detail_ai_review_title">Vérification de l\'IA nécessaire</string>
     <string name="report_detail_ai_review_message">Notre IA n\'a pas pu classer cette photo. Choisissez vous-même la bonne catégorie et ajoutez une note, puis renvoyez-la.</string>
+    <string name="report_detail_ai_review_message_with_suggestion">Notre IA pense que cela ressemble à \"%1$s\", différent de la catégorie que vous avez choisie. Acceptez la suggestion de l\'IA, gardez la vôtre, ou modifiez le signalement vous-même.</string>
+    <string name="report_detail_accept_ai_suggestion">Accepter la suggestion de l\'IA (%1$s)</string>
+    <string name="report_detail_keep_my_category">Garder ma catégorie (%1$s)</string>
+    <string name="report_detail_edit_manually">Modifier manuellement</string>
     <string name="report_detail_review_and_resubmit">Vérifier et renvoyer</string>
     <string name="report_detail_location_label">Localisation</string>
     <string name="report_detail_address_unavailable">Adresse indisponible</string>
@@ -185,6 +195,7 @@
     <string name="report_list_anonymous_report_description">Signalement anonyme</string>
     <string name="report_list_reported_by">Signalé par %1$s</string>
     <string name="report_list_needs_input_description">Nécessite votre attention</string>
+    <string name="report_list_ai_suggests_category">L\'IA suggère : %1$s - appuyez pour vérifier</string>
     <string name="report_list_unassigned_department">Non attribué</string>
 
     <!-- Status timeline card -->

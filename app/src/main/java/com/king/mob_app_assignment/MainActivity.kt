@@ -111,9 +111,21 @@ class MainActivity : AppCompatActivity() {
 
     @Inject lateinit var appLockPreferences: com.king.mob_app_assignment.util.AppLockPreferences
 
+    @Inject lateinit var appPinStore: com.king.mob_app_assignment.util.AppPinStore
+
     // Set when launched from ShakeBackgroundService after a shake fired while the app was
     // closed/backgrounded - consumed once by the nav graph below to jump straight to Capture.
-    private var pendingCaptureLaunch = false
+    //
+    // BUG FIX (2026-11-20, "shake while locked does nothing"): this was a plain `var`, not
+    // `mutableStateOf` like pendingTargetRoute right below it. onNewIntent landing on an
+    // already-composed, already-stopped MainActivity instance (the normal case for a repeat
+    // shake, since ShakeBackgroundService's startActivity() reuses the existing task) wrote this
+    // field, but Compose has no way to observe a plain field write - the
+    // LaunchedEffect(pendingCaptureLaunch, currentUser) below never saw its key change and never
+    // re-ran, so the effect's "navigate to capture" log line never even appeared. Moving it to
+    // mutableStateOf makes onNewIntent's write trigger recomposition exactly like
+    // pendingTargetRoute already does.
+    private var pendingCaptureLaunch by mutableStateOf(false)
 
     // Set when launched by tapping a notification (see NotificationHelper.contentIntentFor) -
     // holds a raw route string (a fixed Destinations constant, or "report_detail/{id}" with a
@@ -128,9 +140,16 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        // Safe to call on every onCreate (including Activity recreation after the camera trip
+        // that used to re-trigger the PIN screen) - only the first call in this process actually
+        // registers the app-wide backgrounding observer. See AppLockSessionState's own doc.
+        com.king.mob_app_assignment.util.AppLockSessionState.ensureObserverRegistered()
         pendingCaptureLaunch = intent?.getBooleanExtra(EXTRA_LAUNCH_CAPTURE, false) == true
         pendingTargetRoute = intent?.getStringExtra(EXTRA_TARGET_ROUTE)
-        if (pendingCaptureLaunch) allowShowingOverLockScreenForShakeCapture()
+        if (pendingCaptureLaunch) {
+            allowShowingOverLockScreenForShakeCapture()
+            com.king.mob_app_assignment.util.AppLockSessionState.markShakeCaptureStarted()
+        }
 
         setContent {
             val activeMlKitLanguageTag by translationPreferences.activeMlKitLanguageTagFlow
@@ -143,6 +162,21 @@ class MainActivity : AppCompatActivity() {
                 Surface(modifier = Modifier, color = MaterialTheme.colorScheme.background) {
                     val navController = rememberNavController()
                     val hapticFeedback = LocalHapticFeedback.current
+
+                    // BUG FIX 2026-10-08 ("in the app when I shake it still open twice" - reported
+                    // AFTER the background/foreground cross-talk fixes above, so this is a PURE
+                    // foreground-only double-fire, nothing to do with ShakeBackgroundService.
+                    // launchSingleTop (below) only dedupes navigate() calls once Capture is
+                    // ALREADY the current back-stack entry - it does nothing while navigation to
+                    // Capture is still in flight, or while some other screen is still on top. A
+                    // single vigorous/extended shake gesture can cross ShakeDetector's own
+                    // threshold twice with a gap wider than its per-collector DEBOUNCE_MS, so
+                    // collectLatest can legitimately emit twice for what the user experiences as
+                    // one shake. This remember{} tracks the wall-clock time of the last ACCEPTED
+                    // foreground navigation and ignores any further shake within the same short
+                    // window, regardless of ShakeForegroundState's own (differently-scoped)
+                    // cross-talk grace period.
+                    var lastForegroundShakeNavigateAtMs by remember { mutableStateOf(0L) }
 
                     // LifecycleStartEffect (re)starts collection on ON_START and cancels it on
                     // ON_STOP, which registers/unregisters the SensorManager listener inside
@@ -157,17 +191,20 @@ class MainActivity : AppCompatActivity() {
                         com.king.mob_app_assignment.sensor.ShakeForegroundState.setForeground(true)
                         val job = lifecycleScope.launch {
                             shakeDetector.onShakeDetected().collectLatest {
-                                // See ShakeForegroundState's own doc comment ("camera opens, then
-                                // another popup appears") - when this listener is only starting up
-                                // BECAUSE ShakeBackgroundService just brought the app to the
-                                // foreground for a background-triggered shake, the same physical
-                                // gesture can still be "in progress" from the sensor's point of
-                                // view and would otherwise fire a second, redundant navigation for
-                                // the same shake. Ignored only for a brief grace window right after
-                                // such a trigger - never for a genuinely new shake afterward.
-                                if (com.king.mob_app_assignment.sensor.ShakeForegroundState.isWithinPostBackgroundTriggerGrace()) {
+                                android.util.Log.d("ShakeDebug", "foreground onShakeDetected fired")
+                                // ShakeBackgroundService now fully stops its own sensor
+                                // registration while ShakeForegroundState.isForeground is true (see
+                                // that service's own class doc for the 2026-10-08 root-cause fix),
+                                // so there is no longer a background-trigger-then-foreground-
+                                // reacts race to guard against here - only this debounce, against
+                                // a single extended shake gesture re-crossing threshold twice.
+                                val now = System.currentTimeMillis()
+                                if (now - lastForegroundShakeNavigateAtMs < FOREGROUND_SHAKE_NAVIGATE_DEBOUNCE_MS) {
+                                    android.util.Log.d("ShakeDebug", "foreground shake debounced")
                                     return@collectLatest
                                 }
+                                lastForegroundShakeNavigateAtMs = now
+                                android.util.Log.d("ShakeDebug", "foreground navigating to capture")
                                 hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
                                 navController.navigate(Destinations.capture(viaShake = true)) {
                                     launchSingleTop = true
@@ -200,10 +237,30 @@ class MainActivity : AppCompatActivity() {
                     val hasAcknowledgedPrivacyNotice by privacyNoticePreferences.hasAcknowledgedFlow
                         .collectAsState(initial = null)
 
+                    // BUG FIX 2026-10-08 ("camera double open again"): this is a SECOND,
+                    // independent path to the exact same navigate() call the foreground sensor
+                    // collector above already debounces (lastForegroundShakeNavigateAtMs) - this
+                    // one fires from onNewIntent (see MainActivity's own override) when
+                    // ShakeBackgroundService's startActivity() lands on an already-running
+                    // MainActivity instance rather than creating a fresh one. If the background
+                    // service's isCurrentlyForeground() check has any race against the live
+                    // foreground collector detecting the same physical shake, BOTH paths could
+                    // navigate to Capture independently - the foreground debounce alone couldn't
+                    // catch this because it only guarded its own collector's call site, not this
+                    // one. Sharing the same debounce timestamp across both makes the protection
+                    // apply regardless of which path a given shake happens to take.
                     androidx.compose.runtime.LaunchedEffect(pendingCaptureLaunch, currentUser) {
                         if (pendingCaptureLaunch && currentUser != null) {
+                            android.util.Log.d("ShakeDebug", "pendingCaptureLaunch effect firing")
                             pendingCaptureLaunch = false
-                            navController.navigate(Destinations.capture(viaShake = true)) { launchSingleTop = true }
+                            val now = System.currentTimeMillis()
+                            if (now - lastForegroundShakeNavigateAtMs >= FOREGROUND_SHAKE_NAVIGATE_DEBOUNCE_MS) {
+                                lastForegroundShakeNavigateAtMs = now
+                                android.util.Log.d("ShakeDebug", "pendingCaptureLaunch navigating to capture")
+                                navController.navigate(Destinations.capture(viaShake = true)) { launchSingleTop = true }
+                            } else {
+                                android.util.Log.d("ShakeDebug", "pendingCaptureLaunch debounced")
+                            }
                         }
                     }
 
@@ -224,7 +281,18 @@ class MainActivity : AppCompatActivity() {
                         isAdmin = currentUser?.role == UserRole.ADMIN,
                         hasCompletedOnboarding = hasCompletedOnboarding,
                         hasAcknowledgedPrivacyNotice = hasAcknowledgedPrivacyNotice,
-                        hasCompletedAppLockSetup = hasCompletedAppLockSetup,
+                        // BUG FIX (found via emulator testing): hasCompletedAppLockSetup lives in
+                        // plain DataStore prefs, but the PIN itself lives in Keystore-backed
+                        // EncryptedSharedPreferences (see AppPinStore) - these can legitimately
+                        // desync, e.g. Android auto-backup/restore brings DataStore's "setup done"
+                        // flag back on a new device/reinstall, but the Keystore key behind the PIN
+                        // hash never survives that restore, leaving AppPinStore empty. Without this
+                        // check, that combination permanently locked a genuinely-signed-in user out
+                        // on AppLockScreen (verifyPin() can never succeed with no hash stored, and
+                        // "Sign out instead" was the only escape). Treat "setup done" as false
+                        // whenever no PIN actually exists, so this self-heals back into
+                        // SetupAppLockScreen instead of a dead end.
+                        hasCompletedAppLockSetup = hasCompletedAppLockSetup?.let { it && appPinStore.isPinSet() },
                         onOnboardingFinished = {
                             lifecycleScope.launch { onboardingPreferences.setOnboardingCompleted() }
                         },
@@ -252,6 +320,7 @@ class MainActivity : AppCompatActivity() {
         if (intent.getBooleanExtra(EXTRA_LAUNCH_CAPTURE, false)) {
             pendingCaptureLaunch = true
             allowShowingOverLockScreenForShakeCapture()
+            com.king.mob_app_assignment.util.AppLockSessionState.markShakeCaptureStarted()
         }
         intent.getStringExtra(EXTRA_TARGET_ROUTE)?.let { pendingTargetRoute = it }
     }
@@ -277,6 +346,13 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         const val EXTRA_LAUNCH_CAPTURE = "extra_launch_capture"
+
+        // See the foreground shake collector's own BUG FIX comment above (2026-10-08, "shake
+        // still opens camera twice", a pure foreground-only double-fire distinct from the
+        // background/foreground cross-talk ShakeForegroundState already guards against). Must
+        // comfortably exceed ShakeDetector's own per-collector DEBOUNCE_MS (1500ms), since this
+        // guards against collectLatest legitimately emitting twice for one extended gesture.
+        private const val FOREGROUND_SHAKE_NAVIGATE_DEBOUNCE_MS = 2000L
 
         // Route string a tapped notification wants to land on - see NotificationHelper's
         // contentIntentFor(). A raw string rather than a typed sealed class since it's just
@@ -357,16 +433,43 @@ private fun RootNavGraph(
 
     // App-lock (PIN, required, biometric optional on top - per explicit request replacing
     // "email/password every time" with a lock-screen model) has two states this composable
-    // reacts to, on top of hasCompletedAppLockSetup (persisted - see AppLockPreferences):
-    // isAppUnlockedThisSession is deliberately NOT persisted - it lives only as in-memory
-    // remember{} state, reset to false every fresh process/composition, so being "unlocked"
-    // never survives the app being killed and reopened (that would defeat the entire point of a
-    // lock screen). PendingAppLockCredentials.consume() hands SetupAppLockScreen the plaintext
-    // email/password from the login/register call that JUST succeeded - the only moment that
-    // password is ever available outside a BiometricPrompt challenge - see its own doc comment.
-    var isAppUnlockedThisSession by remember { mutableStateOf(false) }
+    // reacts to, on top of hasCompletedAppLockSetup (persisted - see AppLockPreferences).
+    //
+    // BUG FIX 2026-10-08 ("if I go back from the camera it asks for PIN every time") + FEATURE
+    // (explicit request: "I want the pin to have like sessions - if the app wasn't closed don't
+    // ask, or if the app has been in background for too long then ask"): this used to be
+    // `remember { mutableStateOf(false) }` directly in this composable - Activity-instance-scoped,
+    // not process-scoped as its old comment intended. Launching the system camera backgrounds
+    // MainActivity behind a separate, memory-heavy activity; Android frequently reclaims a
+    // backgrounded Activity under that memory pressure, so returning from the camera often
+    // recreated MainActivity from scratch, wiping this remember{} back to false and re-triggering
+    // the PIN screen even though the user never really left. It now reads from
+    // AppLockSessionState, a process-wide singleton (same pattern as ShakeForegroundState) that
+    // survives Activity recreation, and which itself implements the timed-session behaviour via a
+    // ProcessLifecycleOwner observer: a brief camera round-trip or app-switch leaves it unlocked,
+    // but being backgrounded past its own timeout clears it on the next resume - see its own doc
+    // comment for the exact mechanism. The mutableStateOf mirror below exists only so Compose can
+    // observe a plain AtomicBoolean; it is re-synced from the singleton on every recomposition of
+    // this composable (which already happens on every auth/nav state change relevant here), and
+    // every write goes through both so they never drift apart.
+    var isAppUnlockedThisSession by remember { mutableStateOf(com.king.mob_app_assignment.util.AppLockSessionState.isUnlocked()) }
+    isAppUnlockedThisSession = com.king.mob_app_assignment.util.AppLockSessionState.isUnlocked()
+    fun markAppUnlocked() {
+        com.king.mob_app_assignment.util.AppLockSessionState.markUnlocked()
+        isAppUnlockedThisSession = true
+    }
+    // FEATURE (explicit user request, 2026-11-18): a background shake used to get silently
+    // swallowed whenever the app-lock session had timed out - AppLockScreen's overlay rendered on
+    // top of the capture navigation that had already happened underneath it, so the user saw the
+    // PIN screen flash and then nothing (the pending capture was already consumed with no visible
+    // camera launch). Shake-triggered capture now bypasses this overlay the same way it already
+    // bypasses the system keyguard (see allowShowingOverLockScreenForShakeCapture) - the user sees
+    // the camera immediately, and the app's own PIN is asked for afterward instead, once the photo
+    // is actually captured (see CaptureScreen's RequireDeviceUnlockOncePhotoCaptured, which already
+    // does the same deferred-unlock timing for the system keyguard).
+    val isShakeCaptureInProgress = com.king.mob_app_assignment.util.AppLockSessionState.isShakeCaptureInProgress()
     val needsAppLockSetup = isLoggedIn && hasCompletedAppLockSetup == false
-    val needsAppLockUnlock = isLoggedIn && hasCompletedAppLockSetup == true && !isAppUnlockedThisSession
+    val needsAppLockUnlock = isLoggedIn && hasCompletedAppLockSetup == true && !isAppUnlockedThisSession && !isShakeCaptureInProgress
 
     // BUG FIX 2026-10-01: "sign out instead" on the PIN lock screen bypassed login entirely,
     // landing back in whatever MAIN_GRAPH screen was already on the back stack underneath it.
@@ -378,10 +481,11 @@ private fun RootNavGraph(
     // ever told navController to actually pop back to AUTH_GRAPH. ProfileScreen's own sign-out
     // (see mainGraph's PROFILE destination below) already does this navigate+popUpTo correctly;
     // this wrapper gives every onSignOut call site in this composable the same real navigation,
-    // and also resets isAppUnlockedThisSession so a later sign-in doesn't inherit a stale
-    // "already unlocked" flag from the session that just ended.
+    // and also resets the app-lock session so a later sign-in doesn't inherit a stale "already
+    // unlocked" flag from the session that just ended.
     val onSignOutWithNavigation: () -> Unit = {
         onSignOut()
+        com.king.mob_app_assignment.util.AppLockSessionState.reset()
         isAppUnlockedThisSession = false
         navController.navigate(Destinations.AUTH_GRAPH) {
             popUpTo(Destinations.MAIN_GRAPH) { inclusive = true }
@@ -454,12 +558,12 @@ private fun RootNavGraph(
                 com.king.mob_app_assignment.ui.auth.SetupAppLockScreen(
                     accountEmail = pending.email,
                     accountPassword = pending.password,
-                    onSetupComplete = { isAppUnlockedThisSession = true },
+                    onSetupComplete = { markAppUnlocked() },
                 )
             }
         } else if (needsAppLockUnlock) {
             com.king.mob_app_assignment.ui.auth.AppLockScreen(
-                onUnlocked = { isAppUnlockedThisSession = true },
+                onUnlocked = { markAppUnlocked() },
                 onSignOutInstead = onSignOutWithNavigation,
             )
         } else if (isInMainGraph && !permissionGateResolved) {
@@ -485,7 +589,18 @@ private fun RootNavGraph(
                 var offsetY by remember { mutableFloatStateOf(0f) }
                 // Default resting position: bottom-end, same corner it always occupied - only
                 // the ability to drag it elsewhere is new, not the default placement.
-                val defaultOffsetPx = with(density) { 16.dp.toPx() to 88.dp.toPx() }
+                //
+                // BUG FIX (found via manual testing, 2026-11-18): 88.dp only cleared the bottom
+                // nav bar, not Home's own "Shake in background" card, which sits directly above
+                // it and extends the same width as the screen - the FAB's default position landed
+                // squarely on top of that card's toggle switch and covered its description text
+                // every single time Home was (re)opened, not just in some edge case. The drag
+                // escape hatch above existed for exactly this risk, but doesn't help if the
+                // default spot collides on first load before a user has any reason to drag it.
+                // 320.dp clears both the "Shake in background" card AND the "New Report" button
+                // above it (confirmed visually against a real device screenshot - 200.dp still
+                // touched both), rather than just nudging past the first guess.
+                val defaultOffsetPx = with(density) { 16.dp.toPx() to 320.dp.toPx() }
 
                 FloatingActionButton(
                     onClick = { navController.navigate(Destinations.CHAT) },
@@ -879,7 +994,21 @@ private fun MainScaffold(
                                 androidx.compose.material3.Icon(item.icon, contentDescription = item.label)
                             }
                         },
-                        label = { Text(item.label) },
+                        // BUG FIX (found via manual testing, 2026-11-20): with 6 items in an
+                        // Admin session's nav bar (vs. 4 for a Citizen), NavigationBar divides
+                        // the available width evenly across all of them, leaving noticeably less
+                        // per-item space than the Citizen layout was ever tested with - long
+                        // labels like "Dashboard" wrapped onto two lines ("Dashboa"/"rd"),
+                        // breaking the single-line layout every other item still had. maxLines=1
+                        // with an ellipsis fallback keeps every label on one line regardless of
+                        // how many items are shown or how narrow the screen is.
+                        label = {
+                            Text(
+                                text = item.label,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            )
+                        },
                     )
                 }
             }

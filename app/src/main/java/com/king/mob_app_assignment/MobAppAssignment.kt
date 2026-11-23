@@ -119,5 +119,19 @@ class MobAppAssignment : Application(), Configuration.Provider {
             description = "Persistent notification shown while Shake to Report listens for a shake in the background"
         }
         getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
+
+        // BUG FIX (2026-11-18): a full-screen intent is only eligible to auto-present (rather
+        // than sit silently in the shade) if its OWN channel is IMPORTANCE_HIGH - the persistent
+        // "listening" channel above is deliberately LOW (it shouldn't be intrusive just for
+        // running), so a genuine shake-triggered capture alert needs a separate channel entirely.
+        // See ShakeBackgroundService.CAPTURE_CHANNEL_ID/buildCaptureAlertNotification.
+        val captureChannel = NotificationChannel(
+            ShakeBackgroundService.CAPTURE_CHANNEL_ID,
+            "Shake detected",
+            NotificationManager.IMPORTANCE_HIGH,
+        ).apply {
+            description = "Shown briefly when a shake is detected while the app is closed, to bring up the report camera"
+        }
+        getSystemService(NotificationManager::class.java)?.createNotificationChannel(captureChannel)
     }
 }

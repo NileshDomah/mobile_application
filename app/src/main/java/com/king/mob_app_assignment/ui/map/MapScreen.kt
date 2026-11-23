@@ -184,15 +184,22 @@ private fun MapLegend(modifier: Modifier = Modifier) {
         shape = MaterialTheme.shapes.large,
         elevation = CardDefaults.cardElevation(defaultElevation = Elevation.raised),
     ) {
-        androidx.compose.foundation.lazy.LazyRow(
+        // BUG FIX (found via manual testing, 2026-11-20): a LazyRow here clipped the "Other"
+        // entry off the right edge of the screen with no visual hint there was more content to
+        // scroll to - the same clipping pattern already fixed in CaptureScreen's CategorySection
+        // and photo grid. This is a static legend (5 fixed entries, not a scrollable filter list),
+        // so FlowRow wrapping onto a second line when needed is strictly better than clipping.
+        @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+        androidx.compose.foundation.layout.FlowRow(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            item { LegendEntry(color = ReportCategory.POTHOLE.legendColor(), label = translatedStringResource(R.string.map_legend_pothole)) }
-            item { LegendEntry(color = ReportCategory.STREETLIGHT.legendColor(), label = translatedStringResource(R.string.map_legend_streetlight)) }
-            item { LegendEntry(color = ReportCategory.GARBAGE.legendColor(), label = translatedStringResource(R.string.map_legend_garbage)) }
-            item { LegendEntry(color = ReportCategory.WATER_LEAK.legendColor(), label = translatedStringResource(R.string.map_legend_water_leak)) }
-            item { LegendEntry(color = ReportCategory.OTHER.legendColor(), label = translatedStringResource(R.string.map_legend_other)) }
+            LegendEntry(color = ReportCategory.POTHOLE.legendColor(), label = translatedStringResource(R.string.map_legend_pothole))
+            LegendEntry(color = ReportCategory.STREETLIGHT.legendColor(), label = translatedStringResource(R.string.map_legend_streetlight))
+            LegendEntry(color = ReportCategory.GARBAGE.legendColor(), label = translatedStringResource(R.string.map_legend_garbage))
+            LegendEntry(color = ReportCategory.WATER_LEAK.legendColor(), label = translatedStringResource(R.string.map_legend_water_leak))
+            LegendEntry(color = ReportCategory.OTHER.legendColor(), label = translatedStringResource(R.string.map_legend_other))
         }
     }
 }

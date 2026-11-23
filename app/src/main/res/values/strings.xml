@@ -54,6 +54,11 @@
 
     <!-- Settings screen -->
     <string name="settings_title">Settings</string>
+    <string name="settings_shake_in_background_title">Shake in background</string>
+    <string name="settings_shake_in_background_description">Detect a shake even when the app is closed. Shows a persistent notification while active, and uses more battery.</string>
+    <string name="settings_biometric_title">Biometric sign-in</string>
+    <string name="settings_biometric_disable_description">Turn off fingerprint/face sign-in on this device. You can re-enable it anytime with your password.</string>
+    <string name="settings_biometric_enable_description">Sign in with your fingerprint or face instead of typing your password every time.</string>
     <string name="settings_shake_sensitivity_title">Shake sensitivity</string>
     <string name="settings_shake_sensitivity_description">Lower = more sensitive (easier to trigger a shake report). Higher = requires a harder shake.</string>
     <string name="settings_current_threshold">Current threshold: %1$d</string>
@@ -100,6 +105,7 @@
     <!-- My Reports screen -->
     <string name="my_reports_title">My Reports</string>
     <string name="my_reports_retry">Retry</string>
+    <string name="my_reports_needs_review_section">Needs your review (%1$d)</string>
     <string name="my_reports_tab_not_solved">Not Solved (%1$d)</string>
     <string name="my_reports_tab_solved">Solved (%1$d)</string>
     <string name="my_reports_empty_not_solved">No unsolved reports - anything you report will show up here until it\'s resolved.</string>
@@ -144,6 +150,10 @@
     <string name="report_detail_anonymous_label">Submitted anonymously</string>
     <string name="report_detail_ai_review_title">AI review needed</string>
     <string name="report_detail_ai_review_message">Our AI couldn\'t categorize this photo. Please choose the correct category yourself and add a note, then resubmit.</string>
+    <string name="report_detail_ai_review_message_with_suggestion">Our AI thinks this looks like \"%1$s\", which is different from the category you picked. Accept the AI\'s suggestion, keep your own, or edit the report yourself.</string>
+    <string name="report_detail_accept_ai_suggestion">Accept AI suggestion (%1$s)</string>
+    <string name="report_detail_keep_my_category">Keep my category (%1$s)</string>
+    <string name="report_detail_edit_manually">Edit manually</string>
     <string name="report_detail_review_and_resubmit">Review and resubmit</string>
     <string name="report_detail_location_label">Location</string>
     <string name="report_detail_address_unavailable">Address unavailable</string>
@@ -187,6 +197,7 @@
     <string name="report_list_anonymous_report_description">Anonymous report</string>
     <string name="report_list_reported_by">Reported by %1$s</string>
     <string name="report_list_needs_input_description">Needs your input</string>
+    <string name="report_list_ai_suggests_category">AI suggests: %1$s - tap to review</string>
     <string name="report_list_unassigned_department">Unassigned</string>
 
     <!-- Status timeline card -->

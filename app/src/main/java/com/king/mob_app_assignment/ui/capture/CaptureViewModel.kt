@@ -273,7 +273,10 @@ class CaptureViewModel @Inject constructor(
                 return
             }
         } else if (state.photoFile == null) {
-            _uiState.update { it.copy(errorMessage = "Something went wrong with the photo - please retake it") }
+            // BUG FIX (found via manual testing, 2026-11-17): this fired on the ordinary
+            // "tapped Submit without ever adding a photo" case too, not just a genuine capture
+            // failure - "please retake it" is wrong and confusing when nothing was ever taken.
+            _uiState.update { it.copy(errorMessage = "Add a photo before submitting your report") }
             return
         }
 

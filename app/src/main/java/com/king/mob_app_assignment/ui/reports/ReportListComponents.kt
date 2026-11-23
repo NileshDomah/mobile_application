@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -203,15 +204,24 @@ fun ReportFilterBar(
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            item {
-                CategoryChip(
-                    label = translatedStringResource(R.string.report_list_all_statuses),
-                    selected = filter.statusFilter == null,
-                    onClick = { onFilterChange(filter.copy(statusFilter = null)) },
-                )
-            }
-            items(ReportStatus.entries.toList()) { status ->
+        // BUG FIX (found via manual testing, 2026-11-20): these were LazyRows with no visual
+        // hint that they scroll - the last chip in each row ("Resolved" / the last category) sat
+        // cut off right at the screen edge, indistinguishable from the row simply ending there.
+        // Both are small, fixed-size sets (4 statuses, 5 categories, never open-ended), so
+        // wrapping onto a second line via FlowRow is simpler and more discoverable than adding a
+        // scroll-hint affordance to a LazyRow - matches the same fix already applied to
+        // CaptureScreen's CategorySection and the Map legend.
+        @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+        androidx.compose.foundation.layout.FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            CategoryChip(
+                label = translatedStringResource(R.string.report_list_all_statuses),
+                selected = filter.statusFilter == null,
+                onClick = { onFilterChange(filter.copy(statusFilter = null)) },
+            )
+            ReportStatus.entries.forEach { status ->
                 CategoryChip(
                     label = status.label(),
                     selected = filter.statusFilter == status,
@@ -221,18 +231,18 @@ fun ReportFilterBar(
                 )
             }
         }
-        LazyRow(
+        @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+        androidx.compose.foundation.layout.FlowRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.padding(top = 8.dp),
         ) {
-            item {
-                CategoryChip(
-                    label = translatedStringResource(R.string.report_list_all_categories),
-                    selected = filter.categoryFilter == null,
-                    onClick = { onFilterChange(filter.copy(categoryFilter = null)) },
-                )
-            }
-            items(ReportCategory.entries.toList()) { category ->
+            CategoryChip(
+                label = translatedStringResource(R.string.report_list_all_categories),
+                selected = filter.categoryFilter == null,
+                onClick = { onFilterChange(filter.copy(categoryFilter = null)) },
+            )
+            ReportCategory.entries.forEach { category ->
                 CategoryChip(
                     label = category.displayLabel(),
                     selected = filter.categoryFilter == category,
@@ -395,12 +405,55 @@ fun ReportListItem(
                                 modifier = Modifier.size(16.dp).padding(start = 8.dp),
                             )
                         }
-                        if (report.needsAiReview) {
+                    }
+                    // BUG FIX (2026-11-20, user-reported "I never know which report needs review
+                    // unless I already got the notification and opened it"): a 16dp Warning icon
+                    // sitting among other small status icons (video/anonymous) was the ONLY signal
+                    // this report needed attention - easy to miss entirely while scrolling, and it
+                    // never said what the AI actually suggested, only that *something* was flagged.
+                    // This replaces it with a labeled, high-contrast banner naming the AI's
+                    // suggested category directly on the card, so it's visible without opening the
+                    // report or having seen the original notification.
+                    // BUG FIX (2026-11-21, user-reported "if the reports had been resolved they
+                    // don't need AI suggestion"): a resolved report can still carry
+                    // needsAiReview=true if it was resolved before the citizen ever responded to
+                    // the flag - the category is no longer actionable once the underlying issue is
+                    // fixed, so this banner is suppressed for any RESOLVED report regardless of
+                    // which list/tab is rendering it.
+                    if (report.needsAiReview && report.status != ReportStatus.RESOLVED) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(
+                                    color = MaterialTheme.colorScheme.errorContainer,
+                                    shape = MaterialTheme.shapes.small,
+                                )
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                        ) {
                             Icon(
                                 imageVector = Icons.Filled.Warning,
-                                contentDescription = translatedStringResource(R.string.report_list_needs_input_description),
-                                tint = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(16.dp).padding(start = 8.dp),
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            val suggested = report.aiSuggestedCategory?.let {
+                                if (it == ReportCategory.CUSTOM && report.aiSuggestedCustomLabel.isNotBlank()) {
+                                    report.aiSuggestedCustomLabel
+                                } else {
+                                    it.displayLabel()
+                                }
+                            }
+                            Text(
+                                text = if (suggested != null) {
+                                    translatedStringResource(R.string.report_list_ai_suggests_category, suggested)
+                                } else {
+                                    translatedStringResource(R.string.report_list_needs_input_description)
+                                },
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
                             )
                         }
                     }
